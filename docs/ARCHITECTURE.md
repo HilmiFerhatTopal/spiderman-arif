@@ -122,5 +122,5 @@ Dynamic resolution lowers the internal render scale when the frame time exceeds 
 
 `window.__game` (dev builds) exposes: manual stepping, input injection, look control, teleport, state read-back, renderer stats, time of day, fixed camera poses for screenshots, UI visibility, and in-page drivers for the protocol in `docs/spec/05`: rope test, collision fuzz, anchor availability, traversal bots, soak, plus the character test (foot sliding, limb clipping) and ring races. Playwright specs in `tests/` call these drivers and assert the thresholds; numbers are written to `test-results/*.json`:
 
-- a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
-- f `character.spec.ts` planted feet and limb clipping, g `ui.spec.ts` settings/audio/pause/photo flow, h `rings.spec.ts` ring race, plus `smoke.spec.ts`.
+- a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz plus b2 head-on 95 m/s tunnelling check, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
+- f `character.spec.ts` planted feet and limb clipping, g `ui.spec.ts` settings/audio/pause/photo flow, h `rings.spec.ts` ring races, traffic and pedestrians, plus `smoke.spec.ts` (clean console, no request leaves the origin).

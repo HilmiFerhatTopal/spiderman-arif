@@ -50,7 +50,7 @@ test('e. soak: 30 simulated minutes, clean console, no heap growth', async ({ pa
     slopeMBPerMin,
     geometries: [first.geometries, last.geometries],
     textures: [first.textures, last.textures],
-    programs: [first.programs, last.programs],
+    programs: [first.programs, samples.find((s) => s.minute === 10)!.programs, last.programs],
     consoleProblems: problems.length,
     samples,
   };
@@ -62,6 +62,9 @@ test('e. soak: 30 simulated minutes, clean console, no heap growth', async ({ pa
   expect(last.heapMB - first.heapMB).toBeLessThan(8);
   expect(last.geometries).toBeLessThanOrEqual(first.geometries + 2);
   expect(last.textures).toBeLessThanOrEqual(first.textures + 2);
-  expect(last.programs).toBeLessThanOrEqual(first.programs + 2);
+  // Shader programs: the first quality switch (minute 9) compiles the low-quality
+  // variants once; after that every variant is cached and the count must stay flat.
+  const settled = samples.find((s) => s.minute === 10)!;
+  expect(last.programs).toBeLessThanOrEqual(settled.programs + 2);
   expectClean(problems);
 });
