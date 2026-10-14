@@ -1,0 +1,963 @@
+import './styles.css';
+import { tr } from '../i18n/tr';
+import type { CityLayout } from '../world/types';
+import {
+  DEFAULT_SETTINGS,
+  SETTINGS_LIMITS,
+  loadSettings,
+  saveSettings,
+  type BooleanSettingKey,
+  type NumericSettingKey,
+  type Settings,
+} from './settings';
+import { Hud } from './hud';
+import { Minimap } from './minimap';
+import {
+  clamp,
+  el,
+  formatClock,
+  formatDecimal2,
+  formatInteger,
+  formatPercent,
+  formatSigned,
+  icon,
+  roundToStep,
+  setText,
+  textNode,
+} from './dom';
+
+export { formatTime } from './dom';
+export type { Settings } from './settings';
+
+export interface HudState {
+  /** m/s; shown as km/h (rounded). */
+  speed: number;
+  /** metres. */
+  altitude: number;
+  /** Crosshair: valid swing anchor = highlighted amber ring; none = dimmed grey. */
+  anchorValid: boolean;
+  /** Zip target available; when only this is true the crosshair shows a small secondary tick. */
+  zipValid: boolean;
+  /** CSS px of the current anchor point on screen (diamond marker when valid), null = hidden. */
+  anchorScreen: { x: number; y: number } | null;
+  /** Rope in the good-release window: the crosshair pulses before the player releases. */
+  goodWindow: boolean;
+  /** Seconds since the last good release (use Infinity before the first one); burst shows for 0.9 s. */
+  goodFlash: number;
+  ring: null | {
+    routeName: string;
+    index: number;
+    total: number;
+    time: number;
+    best: number | null;
+    finished: null | { time: number; best: number; newBest: boolean };
+  };
+  /** null = hidden. */
+  fps: number | null;
+}
+
+export interface MinimapRing {
+  x: number;
+  z: number;
+  next: boolean;
+  done: boolean;
+  route: number;
+}
+
+export interface PhotoOptions {
+  fov: number;
+  hour: number;
+  onChange: (fov: number, hour: number) => void;
+  onSave: () => void;
+  onExit: () => void;
+}
+
+type MenuScreen = 'main' | 'pause' | 'controls' | 'settings';
+type SubScreen = 'controls' | 'settings';
+type UiSound = 'click' | 'hover';
+
+interface SliderSpec {
+  min: number;
+  max: number;
+  step: number;
+  toUi: (v: number) => number;
+  fromUi: (u: number) => number;
+  format: (v: number) => string;
+}
+
+const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings'];
+const TOAST_MS = 1600;
+const LOADING_FADE_MS = 480;
+const PHOTO_FOV = { min: 30, max: 110, step: 1 };
+const PHOTO_MINUTES = { min: 0, max: 24 * 60, step: 5 };
+const LOADING_STAGES: Readonly<Record<string, string>> = tr.loading;
+
+const ICON_SPEAKER =
+  '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 9.2v5.6h4.2l5.3 4.2V5L7.2 9.2z"/>' +
+  '<path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" d="M15.8 8.6a4.8 4.8 0 0 1 0 6.8M18.6 5.9a8.6 8.6 0 0 1 0 12.2"/></svg>';
+const ICON_MOUSE =
+  '<svg viewBox="0 0 24 24"><rect x="5.5" y="2.5" width="13" height="19" rx="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/>' +
+  '<path fill="currentColor" d="M12 3.7V10H6.6V9A5.4 5.4 0 0 1 12 3.7z"/><path d="M12 2.5v7.5" stroke="currentColor" stroke-width="2"/></svg>';
+const ICON_CAMERA =
+  '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 7h3.2l1.9-2.6h5.8L16.8 7H20a1.5 1.5 0 0 1 1.5 1.5v10A1.5 1.5 0 0 1 20 20H4a1.5 1.5 0 0 1-1.5-1.5v-10A1.5 1.5 0 0 1 4 7z"/>' +
+  '<circle cx="12" cy="13.2" r="4" fill="none" stroke="#111" stroke-width="2.2"/></svg>';
+
+const noop = (): void => {};
+
+function stageLabel(label: string): string {
+  return Object.prototype.hasOwnProperty.call(LOADING_STAGES, label) ? (LOADING_STAGES[label] ?? label) : label;
+}
+
+function asQuality(i: number): Settings['quality'] {
+  const q = clamp(Math.round(i), 0, 3);
+  return q === 0 ? 0 : q === 1 ? 1 : q === 2 ? 2 : 3;
+}
+
+function setFill(input: HTMLInputElement): void {
+  const min = Number(input.min);
+  const max = Number(input.max);
+  const t = max > min ? (Number(input.value) - min) / (max - min) : 0;
+  input.style.setProperty('--fill', `${(clamp(t, 0, 1) * 100).toFixed(2)}%`);
+}
+
+function wrapHour(hour: number): number {
+  if (!Number.isFinite(hour)) return 12;
+  return ((hour % 24) + 24) % 24;
+}
+
+/**
+ * Renders a controls key string such as "W A S D", "C veya Q", "1 / 2 / 3 / 4"
+ * or "Sol tık (basılı tut)" as key caps. Separators, joining words and the
+ * trailing note are taken from the string itself, so the text stays in tr.ts.
+ */
+function buildKeyCaps(spec: string): HTMLSpanElement {
+  const wrap = el('span', 'sk-keys');
+  let main = spec.trim();
+  let note = '';
+  const m = /^(.*?)\s*(\([^)]*\))\s*$/.exec(main);
+  if (m && m[1]) {
+    main = m[1];
+    note = m[2] ?? '';
+  }
+  const kbd = (text: string): HTMLElement => {
+    const k = el('kbd', 'sk-kbd', text);
+    if ([...text].length > 3) k.classList.add('sk-kbd-wide');
+    return k;
+  };
+  const parts = main.split(/(\s+\/\s+)/);
+  for (const part of parts) {
+    if (/^\s+\/\s+$/.test(part)) {
+      wrap.append(el('span', 'sk-keys-sep', part.trim()));
+      continue;
+    }
+    const tokens = part.split(/\s+/).filter(Boolean);
+    const groups: Array<{ cap: boolean; words: string[] }> = [];
+    tokens.forEach((tok, i) => {
+      // A lower-case word between two caps ("C veya Q") joins them instead of being part of a cap.
+      const next = tokens[i + 1];
+      const joiner = i > 0 && next !== undefined && /^\p{Ll}+$/u.test(tok) && !/^\p{Ll}/u.test(next);
+      const last = groups[groups.length - 1];
+      if (joiner) groups.push({ cap: false, words: [tok] });
+      else if (last && last.cap) last.words.push(tok);
+      else groups.push({ cap: true, words: [tok] });
+    });
+    for (const g of groups) {
+      if (!g.cap) {
+        wrap.append(el('span', 'sk-keys-word', g.words.join(' ')));
+      } else if (g.words.length > 1 && g.words.every((w) => [...w].length === 1)) {
+        for (const w of g.words) wrap.append(kbd(w));
+      } else {
+        wrap.append(kbd(g.words.join(' ')));
+      }
+    }
+  }
+  if (note) wrap.append(el('span', 'sk-keys-note', note));
+  return wrap;
+}
+
+/**
+ * DOM user interface: loading screen, main/pause menus, controls and settings
+ * screens, HUD, rotating minimap, toasts and the photo-mode panel. All text
+ * comes from src/i18n/tr.ts. The game drives it through the public members.
+ */
+export class UI {
+  onPlay: () => void = noop;
+  onResume: () => void = noop;
+  onMainMenu: () => void = noop;
+  onUiSound: (kind: UiSound) => void = noop;
+  /** Called on every settings change, after the settings were saved. */
+  onSettingsChange: (s: Settings) => void = noop;
+  /** Live settings object (loaded from localStorage); mutated in place by the settings screen. */
+  readonly settings: Settings = loadSettings();
+
+  private readonly root: HTMLElement;
+  private readonly hud: Hud;
+  private readonly minimap: Minimap;
+  private readonly loadingEl: HTMLDivElement;
+  private readonly loadingBar: HTMLDivElement;
+  private readonly loadingFill: HTMLDivElement;
+  private readonly loadingPct: Text;
+  private readonly loadingStage: Text;
+  private readonly menuLayer: HTMLDivElement;
+  private readonly screens: Record<MenuScreen, HTMLDivElement>;
+  private readonly audioHint: HTMLElement;
+  private readonly toastEl: HTMLDivElement;
+  private readonly toastText: Text;
+  private readonly resumeEl: HTMLDivElement;
+  private readonly photoEl: HTMLElement;
+  private readonly photoFov: HTMLInputElement;
+  private readonly photoFovVal: Text;
+  private readonly photoTime: HTMLInputElement;
+  private readonly photoTimeVal: Text;
+  private readonly settingSyncers: Array<() => void> = [];
+
+  private screen: MenuScreen | null = null;
+  private returnTo: 'main' | 'pause' | null = null;
+  private invoker: HTMLElement | null = null;
+  /** Bumped by every screen change, so button defaults can tell whether a callback already navigated. */
+  private screenVersion = 0;
+  private keyboardMode = false;
+  private hudWanted = false;
+  private hudOn = false;
+  private photo: PhotoOptions | null = null;
+  private toastTimer = 0;
+  private loadingTimer = 0;
+  private loadingVisible = true;
+  private resumeShown = false;
+
+  constructor(root: HTMLElement) {
+    this.root = root;
+    root.classList.add('sk-ui');
+    root.setAttribute('lang', 'tr');
+
+    this.hud = new Hud();
+    this.minimap = new Minimap(tr.hud.north, tr.hud.minimap);
+    this.hud.layer.append(this.minimap.el);
+
+    const top = el('div', 'sk-top');
+    this.toastEl = el('div', 'sk-toast');
+    this.toastEl.setAttribute('role', 'status');
+    this.toastEl.setAttribute('aria-live', 'polite');
+    const toastSpan = el('span', 'sk-toast-text');
+    this.toastText = textNode(toastSpan);
+    this.toastEl.append(toastSpan);
+    top.append(this.hud.ringPanel, this.toastEl);
+
+    this.resumeEl = el('div', 'sk-resume');
+    this.resumeEl.append(icon(ICON_MOUSE), el('span', 'sk-resume-text', tr.hud.clickToResume));
+
+    const photo = this.buildPhoto();
+    this.photoEl = photo.panel;
+    this.photoFov = photo.fov;
+    this.photoFovVal = photo.fovVal;
+    this.photoTime = photo.time;
+    this.photoTimeVal = photo.timeVal;
+
+    const main = this.buildMain();
+    this.audioHint = main.audioHint;
+    this.screens = {
+      main: main.screen,
+      pause: this.buildPause(),
+      controls: this.buildControls(),
+      settings: this.buildSettings(),
+    };
+    this.menuLayer = el('div', 'sk-menu-layer');
+    for (const name of SCREEN_NAMES) this.menuLayer.append(this.screens[name]);
+
+    const loading = this.buildLoading();
+    this.loadingEl = loading.root;
+    this.loadingBar = loading.bar;
+    this.loadingFill = loading.fill;
+    this.loadingPct = loading.pct;
+    this.loadingStage = loading.stage;
+
+    root.append(this.hud.layer, this.hud.fpsEl, this.resumeEl, this.photoEl, this.menuLayer, top, this.loadingEl);
+
+    window.addEventListener('resize', this.onResize);
+    window.addEventListener('pointerdown', this.onPointerDown, true);
+    this.onResize();
+    this.setLoading(0, '');
+  }
+
+  /** True while any menu screen or the photo-mode panel is open. */
+  get menuOpen(): boolean {
+    return this.screen !== null || this.photo !== null;
+  }
+
+  /** True while the photo-mode panel is open. */
+  get photoOpen(): boolean {
+    return this.photo !== null;
+  }
+
+  // ---------------------------------------------------------------- loading
+
+  setLoading(fraction: number, label: string): void {
+    const f = Number.isFinite(fraction) ? clamp(fraction, 0, 1) : 0;
+    this.loadingFill.style.width = `${(f * 100).toFixed(1)}%`;
+    this.loadingBar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
+    setText(this.loadingPct, formatPercent(f));
+    setText(this.loadingStage, stageLabel(label));
+  }
+
+  hideLoading(): void {
+    if (!this.loadingVisible) return;
+    this.loadingVisible = false;
+    this.loadingEl.classList.add('is-hiding');
+    window.clearTimeout(this.loadingTimer);
+    this.loadingTimer = window.setTimeout(() => {
+      this.loadingEl.hidden = true;
+    }, LOADING_FADE_MS);
+  }
+
+  // ------------------------------------------------------------------ menus
+
+  showMainMenu(): void {
+    this.returnTo = null;
+    this.setScreen('main', null);
+  }
+
+  showPause(): void {
+    this.returnTo = null;
+    this.setScreen('pause', null);
+  }
+
+  hideMenus(): void {
+    this.returnTo = null;
+    this.invoker = null;
+    this.setScreen(null, null);
+  }
+
+  showControls(): void {
+    this.enterSub('controls');
+  }
+
+  showSettings(): void {
+    this.syncSettings();
+    this.enterSub('settings');
+  }
+
+  showClickToResume(show: boolean): void {
+    if (show === this.resumeShown) return;
+    this.resumeShown = show;
+    this.resumeEl.classList.toggle('is-on', show);
+  }
+
+  notifyAudioUnlocked(): void {
+    this.audioHint.hidden = true;
+  }
+
+  toast(msg: string): void {
+    setText(this.toastText, msg);
+    this.toastEl.classList.add('is-on');
+    this.toastEl.animate(
+      [
+        { transform: 'translateY(-0.4rem) scale(0.86) rotate(-2deg)', opacity: 0.3 },
+        { transform: 'scale(1.06) rotate(1deg)', opacity: 1, offset: 0.6 },
+        { transform: 'none', opacity: 1 },
+      ],
+      { duration: 240, easing: 'ease-out' },
+    );
+    window.clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('is-on'), TOAST_MS);
+  }
+
+  // -------------------------------------------------------------------- HUD
+
+  setHudVisible(v: boolean): void {
+    this.hudWanted = v;
+    this.applyHudVisibility();
+  }
+
+  updateHud(s: HudState): void {
+    this.hud.updateFps(s.fps);
+    if (this.hudOn) this.hud.update(s);
+  }
+
+  setLayout(layout: CityLayout): void {
+    this.minimap.setLayout(layout);
+  }
+
+  updateMinimap(x: number, z: number, yaw: number, rings: MinimapRing[]): void {
+    this.minimap.update(x, z, yaw, rings);
+  }
+
+  // ------------------------------------------------------------- photo mode
+
+  showPhoto(opts: PhotoOptions): void {
+    this.photo = opts;
+    const fov = clamp(Math.round(Number.isFinite(opts.fov) ? opts.fov : 70), PHOTO_FOV.min, PHOTO_FOV.max);
+    const hour = wrapHour(opts.hour);
+    this.photoFov.value = String(fov);
+    this.photoTime.value = String(roundToStep(hour * 60, PHOTO_MINUTES.step));
+    setFill(this.photoFov);
+    setFill(this.photoTime);
+    setText(this.photoFovVal, `${formatInteger(fov)}${tr.settings.unitDegrees}`);
+    setText(this.photoTimeVal, formatClock(hour));
+    this.photoEl.classList.add('is-on');
+    this.root.classList.add('sk-photo-open');
+    window.addEventListener('keydown', this.onPhotoKey, true);
+    this.applyHudVisibility();
+  }
+
+  hidePhoto(): void {
+    if (this.photo === null) return;
+    this.photo = null;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && this.photoEl.contains(active)) active.blur();
+    this.photoEl.classList.remove('is-on');
+    this.root.classList.remove('sk-photo-open');
+    window.removeEventListener('keydown', this.onPhotoKey, true);
+    this.applyHudVisibility();
+  }
+
+  // ---------------------------------------------------------------- private
+
+  private sound(kind: UiSound): void {
+    this.onUiSound(kind);
+  }
+
+  private applyHudVisibility(): void {
+    const on = this.hudWanted && this.photo === null;
+    if (on === this.hudOn) return;
+    this.hudOn = on;
+    this.root.classList.toggle('sk-hud-on', on);
+    this.minimap.setVisible(on);
+  }
+
+  private readonly onResize = (): void => {
+    const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const rem = Number.isFinite(rootPx) && rootPx > 0 ? rootPx : 16;
+    const size = clamp(Math.round(rem * 12.5), 176, 250);
+    const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
+    const headFont = getComputedStyle(this.root).getPropertyValue('--sk-font-head').trim();
+    this.minimap.resize(size, dpr, headFont || 'Impact, sans-serif');
+  };
+
+  private readonly onPointerDown = (): void => {
+    this.keyboardMode = false;
+  };
+
+  /** Runs a game callback; applies the default navigation only if the callback did not change screens itself. */
+  private runWithDefault(callback: () => void, fallback: () => void): void {
+    const version = this.screenVersion;
+    callback();
+    if (version === this.screenVersion) fallback();
+  }
+
+  private enterSub(target: SubScreen): void {
+    if (this.screen === 'main' || this.screen === 'pause') this.returnTo = this.screen;
+    else if (this.screen === null) this.returnTo = null;
+    this.setScreen(target, null);
+  }
+
+  private openSub(target: SubScreen, invoker: HTMLElement): void {
+    this.invoker = invoker;
+    if (target === 'controls') this.showControls();
+    else this.showSettings();
+  }
+
+  private back(): void {
+    const to = this.returnTo;
+    const focus = this.invoker;
+    this.invoker = null;
+    this.returnTo = null;
+    this.setScreen(to, focus);
+  }
+
+  private setScreen(next: MenuScreen | null, focusTarget: HTMLElement | null): void {
+    this.screenVersion++;
+    const open = next !== null;
+    if (next !== this.screen) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && this.menuLayer.contains(active)) active.blur();
+      for (const name of SCREEN_NAMES) this.screens[name].classList.toggle('is-active', name === next);
+      this.screen = next;
+      this.menuLayer.classList.toggle('is-open', open);
+      this.root.classList.toggle('sk-menu-open', open);
+      if (next !== null && this.keyboardMode) {
+        const container = this.screens[next];
+        const target = focusTarget && container.contains(focusTarget) ? focusTarget : this.focusables(container)[0];
+        target?.focus();
+      }
+    }
+    // Keys are only intercepted while a menu screen is open.
+    if (open) window.addEventListener('keydown', this.onMenuKey, true);
+    else window.removeEventListener('keydown', this.onMenuKey, true);
+  }
+
+  private focusables(container: HTMLElement): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    for (const node of container.querySelectorAll<HTMLElement>('button, input')) {
+      if (node.tabIndex < 0 || node.matches(':disabled') || node.getClientRects().length === 0) continue;
+      out.push(node);
+    }
+    return out;
+  }
+
+  private moveFocus(container: HTMLElement, dir: 1 | -1): void {
+    const items = this.focusables(container);
+    if (items.length === 0) return;
+    const active = document.activeElement;
+    const idx = active instanceof HTMLElement ? items.indexOf(active) : -1;
+    const next = idx < 0 ? (dir > 0 ? 0 : items.length - 1) : (idx + dir + items.length) % items.length;
+    items[next]?.focus();
+    this.sound('hover');
+  }
+
+  /** Capture-phase key handler, attached only while a menu screen is open. */
+  private readonly onMenuKey = (e: KeyboardEvent): void => {
+    const screen = this.screen;
+    if (screen === null) return;
+    const key = e.key;
+    if ((key === 'Escape' || key === 'Backspace') && (screen === 'controls' || screen === 'settings')) {
+      // Handled here: keep it from also reaching the game's own Esc handling.
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) {
+        this.keyboardMode = true;
+        this.sound('click');
+        this.back();
+      }
+      return;
+    }
+    const container = this.screens[screen];
+    if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Tab') {
+      // Up/Down move between rows (Left/Right still adjust sliders and options).
+      e.preventDefault();
+      this.keyboardMode = true;
+      this.moveFocus(container, key === 'ArrowUp' || (key === 'Tab' && e.shiftKey) ? -1 : 1);
+      return;
+    }
+    if (key === 'Enter' || key === ' ') {
+      const target = document.activeElement;
+      if (target instanceof HTMLButtonElement && container.contains(target)) {
+        // Activate exactly once, independent of other listeners that cancel Space.
+        e.preventDefault();
+        this.keyboardMode = true;
+        if (!e.repeat) target.click();
+      }
+    }
+  };
+
+  /**
+   * Photo mode: only Tab is handled (cycles the panel's controls), because the
+   * free camera uses the other keys. Menu screens take precedence when open.
+   */
+  private readonly onPhotoKey = (e: KeyboardEvent): void => {
+    if (this.photo === null || this.screen !== null || e.key !== 'Tab') return;
+    e.preventDefault();
+    this.keyboardMode = true;
+    this.moveFocus(this.photoEl, e.shiftKey ? -1 : 1);
+  };
+
+  private button(
+    label: string,
+    variant: string,
+    onClick: (b: HTMLButtonElement) => void,
+    extra?: HTMLElement,
+  ): HTMLButtonElement {
+    const b = el('button', variant ? `sk-btn ${variant}` : 'sk-btn');
+    b.type = 'button';
+    b.append(el('span', 'sk-btn-label', label));
+    if (extra) b.append(extra);
+    b.addEventListener('mouseenter', () => this.sound('hover'));
+    b.addEventListener('click', () => {
+      this.sound('click');
+      onClick(b);
+    });
+    return b;
+  }
+
+  private backButton(): HTMLButtonElement {
+    return this.button(tr.menu.back, 'is-small', () => this.back(), el('kbd', 'sk-kbd sk-kbd-sm', tr.menu.backKey));
+  }
+
+  private panelTitle(text: string): HTMLHeadingElement {
+    const h = el('h2', 'sk-title');
+    h.append(el('span', 'sk-title-text', text));
+    return h;
+  }
+
+  // ------------------------------------------------------------ loading DOM
+
+  private buildLoading(): { root: HTMLDivElement; bar: HTMLDivElement; fill: HTMLDivElement; pct: Text; stage: Text } {
+    const root = el('div', 'sk-loading');
+    const box = el('div', 'sk-loading-box');
+    const logo = el('div', 'sk-logo sk-logo-loading', tr.title);
+    const tagline = el('p', 'sk-loading-tagline', tr.tagline);
+    const row = el('div', 'sk-loading-row');
+    const pctEl = el('span', 'sk-loading-pct');
+    const pct = textNode(pctEl);
+    row.append(el('span', 'sk-loading-title', tr.loading.title), pctEl);
+    const bar = el('div', 'sk-progress');
+    bar.setAttribute('role', 'progressbar');
+    bar.setAttribute('aria-valuemin', '0');
+    bar.setAttribute('aria-valuemax', '100');
+    bar.setAttribute('aria-label', tr.loading.title);
+    const fill = el('div', 'sk-progress-fill');
+    bar.append(fill);
+    const stageEl = el('div', 'sk-loading-stage');
+    stageEl.setAttribute('aria-live', 'polite');
+    const stage = textNode(stageEl);
+    box.append(logo, tagline, row, bar, stageEl);
+    root.append(box);
+    return { root, bar, fill, pct, stage };
+  }
+
+  // -------------------------------------------------------------- main menu
+
+  private buildMain(): { screen: HTMLDivElement; audioHint: HTMLElement } {
+    const screen = el('div', 'sk-screen sk-screen-main');
+    const wrap = el('div', 'sk-center sk-main');
+    const tagline = el('p', 'sk-tagline');
+    tagline.append(el('span', 'sk-tagline-text', tr.tagline));
+    const nav = el('nav', 'sk-menu');
+    nav.append(
+      this.button(tr.menu.play, 'is-primary is-big', () => this.runWithDefault(this.onPlay, () => this.hideMenus())),
+      this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
+      this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
+    );
+    const audioHint = el('p', 'sk-audio-hint');
+    audioHint.append(icon(ICON_SPEAKER), el('span', 'sk-audio-hint-text', tr.menu.audioHint));
+    wrap.append(el('div', 'sk-sunburst'), el('h1', 'sk-logo', tr.title), tagline, nav, audioHint);
+    screen.append(wrap, el('p', 'sk-credits', tr.menu.credits));
+    return { screen, audioHint };
+  }
+
+  private buildPause(): HTMLDivElement {
+    const screen = el('div', 'sk-screen sk-screen-pause');
+    const panel = el('section', 'sk-center sk-panel sk-panel-pause');
+    const nav = el('nav', 'sk-menu');
+    nav.append(
+      this.button(tr.menu.resume, 'is-primary', () => this.runWithDefault(this.onResume, () => this.hideMenus())),
+      this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
+      this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
+      this.button(tr.menu.mainMenu, '', () => this.runWithDefault(this.onMainMenu, () => this.showMainMenu())),
+    );
+    panel.append(this.panelTitle(tr.menu.paused), nav);
+    screen.append(panel);
+    return screen;
+  }
+
+  // --------------------------------------------------------------- controls
+
+  private buildControls(): HTMLDivElement {
+    const screen = el('div', 'sk-screen sk-screen-sub');
+    const panel = el('section', 'sk-center sk-panel sk-panel-wide');
+    const tables = el('div', 'sk-ctl-tables');
+    const rows = tr.controls.rows;
+    const half = Math.ceil(rows.length / 2);
+    for (const part of [rows.slice(0, half), rows.slice(half)]) {
+      if (part.length === 0) continue;
+      const table = el('table', 'sk-ctl-table');
+      const body = el('tbody');
+      for (const [keys, action] of part) {
+        const row = el('tr');
+        const th = el('th');
+        th.scope = 'row';
+        th.append(buildKeyCaps(keys));
+        row.append(th, el('td', '', action));
+        body.append(row);
+      }
+      table.append(body);
+      tables.append(table);
+    }
+    const tips = el('div', 'sk-tips');
+    const list = el('ul');
+    for (const tip of tr.controls.tips) list.append(el('li', '', tip));
+    tips.append(el('h3', 'sk-tips-title', tr.controls.tipsTitle), list);
+    const actions = el('div', 'sk-actions sk-actions-end');
+    actions.append(this.backButton());
+    panel.append(this.panelTitle(tr.controls.title), tables, tips, actions);
+    screen.append(panel);
+    return screen;
+  }
+
+  // --------------------------------------------------------------- settings
+
+  private buildSettings(): HTMLDivElement {
+    const screen = el('div', 'sk-screen sk-screen-sub');
+    const panel = el('section', 'sk-center sk-panel sk-panel-wide sk-panel-settings');
+    const S = tr.settings;
+    const pct = (key: NumericSettingKey): SliderSpec => ({
+      min: SETTINGS_LIMITS[key].min * 100,
+      max: SETTINGS_LIMITS[key].max * 100,
+      step: key === 'renderScale' ? 5 : 1,
+      toUi: (v) => v * 100,
+      fromUi: (u) => roundToStep(u / 100, 0.01),
+      format: (v) => formatPercent(v),
+    });
+    const cols = el('div', 'sk-st-cols');
+    const left = el('div', 'sk-st-col');
+    const right = el('div', 'sk-st-col');
+    left.append(
+      this.group(S.groupGraphics, [
+        this.qualityRow(),
+        this.sliderRow('renderScale', S.renderScale, pct('renderScale')),
+        this.toggleRow('dynamicResolution', S.dynamicRes),
+        this.sliderRow('fovOffset', S.fov, {
+          min: SETTINGS_LIMITS.fovOffset.min,
+          max: SETTINGS_LIMITS.fovOffset.max,
+          step: 1,
+          toUi: (v) => v,
+          fromUi: (u) => Math.round(u),
+          format: (v) => `${formatSigned(v)}${S.unitDegrees}`,
+        }),
+        this.toggleRow('showFps', S.fpsCounter),
+      ]),
+      this.group(S.groupTime, [
+        this.sliderRow('dayLengthMinutes', S.dayLength, {
+          min: SETTINGS_LIMITS.dayLengthMinutes.min,
+          max: SETTINGS_LIMITS.dayLengthMinutes.max,
+          step: 1,
+          toUi: (v) => v,
+          fromUi: (u) => Math.round(u),
+          format: (v) => `${formatInteger(v)} ${S.unitMinutes}`,
+        }),
+      ]),
+    );
+    right.append(
+      this.group(S.groupControls, [
+        this.sliderRow('sensitivity', S.sensitivity, {
+          min: SETTINGS_LIMITS.sensitivity.min,
+          max: SETTINGS_LIMITS.sensitivity.max,
+          step: 0.05,
+          toUi: (v) => v,
+          fromUi: (u) => roundToStep(u, 0.05),
+          format: (v) => `${formatDecimal2(v)}${S.unitTimes}`,
+        }),
+        this.toggleRow('invertY', S.invertY),
+      ]),
+      this.group(S.groupAudio, [
+        this.sliderRow('masterVolume', S.master, pct('masterVolume')),
+        this.sliderRow('musicVolume', S.music, pct('musicVolume')),
+        this.sliderRow('sfxVolume', S.sfx, pct('sfxVolume')),
+      ]),
+    );
+    cols.append(left, right);
+    const actions = el('div', 'sk-actions');
+    actions.append(
+      this.button(S.reset, 'is-small is-ghost', () => this.resetSettings()),
+      this.backButton(),
+    );
+    panel.append(this.panelTitle(S.title), cols, actions);
+    screen.append(panel);
+    return screen;
+  }
+
+  private group(title: string, rows: HTMLElement[]): HTMLElement {
+    const g = el('section', 'sk-st-group');
+    g.append(el('h3', 'sk-st-group-title', title), ...rows);
+    return g;
+  }
+
+  private syncSettings(): void {
+    for (const sync of this.settingSyncers) sync();
+  }
+
+  private commitSettings(): void {
+    saveSettings(this.settings);
+    this.onSettingsChange(this.settings);
+  }
+
+  private resetSettings(): void {
+    Object.assign(this.settings, DEFAULT_SETTINGS);
+    this.syncSettings();
+    this.commitSettings();
+  }
+
+  private sliderRow(key: NumericSettingKey, label: string, spec: SliderSpec): HTMLElement {
+    const id = `sk-st-${key}`;
+    const row = el('div', 'sk-st-row');
+    const lab = el('label', 'sk-st-label', label);
+    lab.htmlFor = id;
+    const ctrl = el('div', 'sk-st-ctrl');
+    const input = el('input', 'sk-range');
+    input.type = 'range';
+    input.id = id;
+    input.min = String(spec.min);
+    input.max = String(spec.max);
+    input.step = String(spec.step);
+    const out = el('output', 'sk-st-val');
+    out.setAttribute('for', id);
+    const valText = textNode(out);
+    ctrl.append(input, out);
+    row.append(lab, ctrl);
+    const limits = SETTINGS_LIMITS[key];
+    const sync = (): void => {
+      const v = this.settings[key];
+      input.value = String(spec.toUi(v));
+      setFill(input);
+      setText(valText, spec.format(v));
+    };
+    input.addEventListener('input', () => {
+      const v = clamp(spec.fromUi(Number(input.value)), limits.min, limits.max);
+      this.settings[key] = v;
+      setFill(input);
+      setText(valText, spec.format(v));
+      this.commitSettings();
+    });
+    input.addEventListener('change', () => this.sound('click'));
+    this.settingSyncers.push(sync);
+    sync();
+    return row;
+  }
+
+  private toggleRow(key: BooleanSettingKey, label: string): HTMLElement {
+    const id = `sk-st-${key}`;
+    const row = el('div', 'sk-st-row');
+    const lab = el('label', 'sk-st-label', label);
+    lab.htmlFor = id;
+    const ctrl = el('div', 'sk-st-ctrl');
+    const btn = el('button', 'sk-toggle');
+    btn.type = 'button';
+    btn.id = id;
+    btn.setAttribute('role', 'switch');
+    const track = el('span', 'sk-toggle-track');
+    track.append(el('span', 'sk-toggle-knob'));
+    const textEl = el('span', 'sk-toggle-text');
+    const text = textNode(textEl);
+    btn.append(track, textEl);
+    ctrl.append(btn);
+    row.append(lab, ctrl);
+    const sync = (): void => {
+      const on = this.settings[key];
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+      btn.classList.toggle('is-on', on);
+      setText(text, on ? tr.settings.on : tr.settings.off);
+    };
+    btn.addEventListener('mouseenter', () => this.sound('hover'));
+    btn.addEventListener('click', () => {
+      this.sound('click');
+      this.settings[key] = !this.settings[key];
+      sync();
+      this.commitSettings();
+    });
+    this.settingSyncers.push(sync);
+    sync();
+    return row;
+  }
+
+  private qualityRow(): HTMLElement {
+    const row = el('div', 'sk-st-row sk-st-stack');
+    const lab = el('span', 'sk-st-label', tr.settings.quality);
+    lab.id = 'sk-st-quality-label';
+    const seg = el('div', 'sk-seg');
+    seg.setAttribute('role', 'radiogroup');
+    seg.setAttribute('aria-labelledby', lab.id);
+    const options = tr.settings.qualityNames.map((name, i) => {
+      const b = el('button', 'sk-seg-opt');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.append(el('span', 'sk-seg-text', name));
+      b.addEventListener('mouseenter', () => this.sound('hover'));
+      b.addEventListener('click', () => {
+        this.sound('click');
+        this.setQuality(i);
+      });
+      b.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const next = this.settings.quality + (e.key === 'ArrowRight' ? 1 : -1);
+        if (next >= 0 && next <= 3) {
+          this.sound('click');
+          this.setQuality(next);
+        }
+        options[this.settings.quality]?.focus();
+      });
+      return b;
+    });
+    seg.append(...options);
+    row.append(lab, seg);
+    const sync = (): void => {
+      options.forEach((b, i) => {
+        const on = i === this.settings.quality;
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+    };
+    this.settingSyncers.push(sync);
+    sync();
+    return row;
+  }
+
+  private setQuality(i: number): void {
+    const q = asQuality(i);
+    if (q === this.settings.quality) return;
+    this.settings.quality = q;
+    this.syncSettings();
+    this.commitSettings();
+  }
+
+  // ------------------------------------------------------------- photo panel
+
+  private buildPhoto(): {
+    panel: HTMLElement;
+    fov: HTMLInputElement;
+    fovVal: Text;
+    time: HTMLInputElement;
+    timeVal: Text;
+  } {
+    const panel = el('aside', 'sk-panel sk-photo');
+    const title = el('h2', 'sk-title');
+    title.append(icon(ICON_CAMERA, 'sk-icon sk-title-icon'), el('span', 'sk-title-text', tr.photo.title));
+    const fov = this.photoSlider('sk-photo-fov', tr.photo.fov, PHOTO_FOV);
+    const time = this.photoSlider('sk-photo-time', tr.photo.time, PHOTO_MINUTES);
+    const onInput = (): void => {
+      const f = Number(fov.input.value);
+      const minutes = Number(time.input.value);
+      setFill(fov.input);
+      setFill(time.input);
+      setText(fov.val, `${formatInteger(f)}${tr.settings.unitDegrees}`);
+      setText(time.val, formatClock(minutes / 60));
+      this.photo?.onChange(f, minutes / 60);
+    };
+    fov.input.addEventListener('input', onInput);
+    time.input.addEventListener('input', onInput);
+    const actions = el('div', 'sk-photo-actions');
+    actions.append(
+      this.button(tr.photo.save, 'is-primary is-small', (b) => {
+        // Mouse users get focus back on the canvas side; keyboard users keep their place.
+        if (!this.keyboardMode) b.blur();
+        const p = this.photo;
+        if (!p) return;
+        p.onSave();
+        this.toast(tr.photo.saved);
+      }),
+      this.button(tr.photo.exit, 'is-small', () => {
+        const p = this.photo;
+        if (!p) return;
+        p.onExit();
+        this.hidePhoto();
+      }),
+    );
+    panel.append(title, fov.row, time.row, actions, el('p', 'sk-photo-hint', tr.photo.hint));
+    return { panel, fov: fov.input, fovVal: fov.val, time: time.input, timeVal: time.val };
+  }
+
+  private photoSlider(
+    id: string,
+    label: string,
+    range: { min: number; max: number; step: number },
+  ): { row: HTMLElement; input: HTMLInputElement; val: Text } {
+    const row = el('div', 'sk-ph-row');
+    const head = el('div', 'sk-ph-head');
+    const lab = el('label', 'sk-st-label', label);
+    lab.htmlFor = id;
+    const out = el('output', 'sk-st-val');
+    out.setAttribute('for', id);
+    const val = textNode(out);
+    head.append(lab, out);
+    const input = el('input', 'sk-range');
+    input.type = 'range';
+    input.id = id;
+    input.min = String(range.min);
+    input.max = String(range.max);
+    input.step = String(range.step);
+    input.addEventListener('change', () => this.sound('click'));
+    // Release keyboard focus after dragging so free-camera keys never nudge the slider.
+    input.addEventListener('pointerup', () => input.blur());
+    row.append(head, input);
+    return { row, input, val };
+  }
+}

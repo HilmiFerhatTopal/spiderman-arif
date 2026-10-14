@@ -69,7 +69,42 @@ export function installTestApi(game: Game): void {
     renderFrame(): Record<string, number> {
       game.renderOnce();
       const info = game.renderer.info;
-      return { calls: info.render.calls, triangles: info.render.triangles, geometries: info.memory.geometries, textures: info.memory.textures };
+      return { calls: game.frameStats.calls, triangles: game.frameStats.triangles, geometries: info.memory.geometries, textures: info.memory.textures };
+    },
+    setTime(hour: number): void {
+      game.dayNight.setHour(hour);
+      game.dayNight.apply();
+    },
+    /** Place the camera at a fixed pose (photo checks): position and look-at target. */
+    setCameraPose(x: number, y: number, z: number, tx: number, ty: number, tz: number, fov = 70): void {
+      const cam = game.rig.camera;
+      game.cameraOverride = { x, y, z, tx, ty, tz, fov };
+      cam.position.set(x, y, z);
+      cam.fov = fov;
+      cam.lookAt(tx, ty, tz);
+      cam.updateProjectionMatrix();
+      cam.updateMatrixWorld();
+    },
+    clearCameraPose(): void {
+      game.cameraOverride = null;
+    },
+    setQuality(i: number): void {
+      game.applyQuality(i);
+    },
+    stats(): Record<string, number> {
+      game.renderFrame(0);
+      const info = game.renderer.info;
+      const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+      return {
+        calls: game.frameStats.calls,
+        triangles: game.frameStats.triangles,
+        geometries: info.memory.geometries,
+        textures: info.memory.textures,
+        programs: info.programs?.length ?? 0,
+        heapMB: mem ? mem.usedJSHeapSize / 1048576 : -1,
+        internalWidth: game.post.internalWidth,
+        internalHeight: game.post.internalHeight,
+      };
     },
     layoutStats(): unknown {
       return { ...game.layout.stats, colliders: game.world.count, park: game.layout.park, spawn: game.layout.spawn };

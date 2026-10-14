@@ -118,6 +118,10 @@ export class Input {
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
+  keyHeld(code: string): boolean {
+    return this.held.has(code);
+  }
+
   isHeld(action: ActionKey): boolean {
     for (const code of KEYS[action]) if (this.held.has(code)) return true;
     return false;

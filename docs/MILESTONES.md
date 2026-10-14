@@ -16,7 +16,7 @@ Each milestone ends with its verification gate passing, then a git commit. Statu
 
 - [x] M1 — Vite/TS strict/three 0.186.1 project, 120 Hz fixed loop with interpolation, pointer-lock input, spring-arm camera, lil-gui panel over tuning.ts, greybox city, `window.__game`; gate: tsc clean, build OK, smoke test passes with a clean console, greybox screenshot viewed.
 - [x] M2 — collision world, run/sprint/jump/vault/mantle, swing (lossless rope + arcade layer), assist targeting, zip, wall cling/climb, dive, boost, recovery, water respawn, soft boundary; gate: tests a (energy drift 0.0009 %/12 s, catch ratio 1.04, re-attach 25-58 ms), b (12 simulated min, all violation counters 0), c (99.5 %), d (city 0.3 %, park 0.45 % ground time) pass.
-- [ ] M3
+- [x] M3 — procedural city visuals (window-atlas facades with night lights, cornices, pilasters, parapets, rooftop HVAC/tanks/antennas/helipads, fictional signs and billboards), street dressing, park with 598 trees of 4 species + pond + paths, water, piers, bridge, islet + lighthouse, sky/sun/moon/stars/clouds, day-night, shadows, depth+normal outlines; gate: dawn/noon/sunset/night screenshots viewed (water foam bug fixed), max 221 draw calls and 1.47 M triangles at the widest aerial view, tests a-d pass.
 - [ ] M4
 - [ ] M5
 - [ ] M6

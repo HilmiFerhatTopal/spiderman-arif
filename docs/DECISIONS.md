@@ -22,3 +22,7 @@ One line each: decision + why.
 - Pumping (W while swinging) fades out above `swing.pumpMaxSpeed`; going faster takes good releases and dives.
 - Canopy ellipsoids are solid for the player and the camera but are skipped by the rope line-of-sight test (foliage is porous), as are thin props without the camera-blocking flag.
 - Ground snapping ignores canopy ellipsoids (approximate contact); the player can still land on a canopy through the resolver's contact normals.
+- Static chunk geometry (facades, roof props, street props, signs, lamp bulbs) shares one cel material per 240 m chunk; aWin.x selects window/plain/emissive/sign shading, so a chunk is one draw call.
+- Trees are InstancedMeshes per species per 320 m chunk with a near LOD (blobs) and a far LOD (one silhouette blob) switched at ~300 m; this keeps the widest view under 1.5 M triangles.
+- Outlines fade with the scene fog so fogged distant silhouettes never read as wireframes.
+- Scene colour is rendered to a half-float MRT target (colour + view normal + float depth); the composite pass converts to sRGB, then FXAA (Medium and up).
