@@ -1,0 +1,6 @@
+# Launchers must keep their native line endings on every checkout:
+# cmd.exe mis-parses labels in LF batch files, sh fails on CRLF scripts.
+*.bat      text eol=crlf
+*.ps1      text eol=crlf
+*.sh       text eol=lf
+*.command  text eol=lf

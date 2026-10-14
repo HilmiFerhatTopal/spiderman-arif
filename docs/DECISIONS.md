@@ -58,3 +58,9 @@ One line each: decision + why.
 - Tunnelling is checked directly (test b2): 400 head-on impacts at 95 m/s into thin posts and building walls, which must never end on the far side or inside.
 - The smoke test fails if any request leaves the page's origin (only same-origin, data: and blob: URLs are allowed).
 - `document.body.dataset.ready` records the boot time (ms since navigation) so cold-load time can be measured on the production build, which has no test API.
+- One launcher per OS (`BASLAT-Windows.bat`, `BASLAT-Mac.command`, `BASLAT-Linux.sh`): double-clicking needs the native script type of each system. All three hand over to `scripts/launch.mjs`, so they behave the same.
+- Launchers use an installed Node.js when it fits Vite 8's range and has npm. Otherwise they download portable Node.js 22.23.3 (the newest 22 LTS release) into `.tools/` with a SHA-256 pinned in the script: no admin rights, no package manager, nothing installed system-wide. npmmirror is the fallback source; the pinned hash makes any source safe.
+- The launcher builds through the Vite API without the `tsc` type check of `npm run build`. Type checking is a development step, and skipping it means playing does not depend on the TypeScript native binary.
+- The launcher installs with `npm ci --ignore-scripts`. The only install script in the tree is fsevents' `node-gyp rebuild`, which opens an Xcode-tools prompt on Macs without them; fsevents already ships its prebuilt binary.
+- The Windows launcher files are ASCII-only, because cmd.exe reads batch files in the console code page and Windows PowerShell reads BOM-less scripts as ANSI. Node.js prints the Turkish messages correctly, since it writes to the console as UTF-16.
+- `.gitattributes` pins CRLF for `.bat`/`.ps1` and LF for `.sh`/`.command`: cmd.exe mis-parses labels in LF batch files, and sh fails on CRLF.

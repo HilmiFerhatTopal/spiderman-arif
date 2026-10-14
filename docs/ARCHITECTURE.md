@@ -124,3 +124,12 @@ Dynamic resolution lowers the internal render scale when the frame time exceeds 
 
 - a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz plus b2 head-on 95 m/s tunnelling check, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
 - f `character.spec.ts` planted feet and limb clipping, g `ui.spec.ts` settings/audio/pause/photo flow, h `rings.spec.ts` ring races, traffic and pedestrians, plus `smoke.spec.ts` (clean console, no request leaves the origin).
+
+## 10. Launchers
+
+`BASLAT-Windows.bat`, `BASLAT-Mac.command` and `BASLAT-Linux.sh` start the game from a fresh clone with nothing preinstalled. Each only finds a usable Node.js and hands over to `scripts/launch.mjs`, so the behaviour is the same everywhere:
+
+- `scripts/check-node.cjs` accepts the running Node.js when it satisfies Vite 8 (^20.19 or >=22.12) and npm is present.
+- Otherwise `scripts/install-node-windows.ps1` (Windows) or `scripts/bootstrap.sh` (macOS, Linux) downloads Node.js 22.23.3 for the machine's OS and CPU into `.tools/node` and checks it against a SHA-256 pinned in the script. It is used only for this project.
+- `scripts/launch.mjs` runs `npm ci` when the lockfile, OS or CPU changed since the last install (stamp in `node_modules`), builds with the Vite API when the content hash of the build inputs changed (stamp in `dist`), serves `dist/` with `vite preview` on 127.0.0.1 (port 4173 or the next free one) and opens the default browser.
+- `.github/workflows/launchers.yml` runs every launcher with `--check` on Windows, macOS and Linux (x64 and ARM64), once with the runner's Node.js and once with the portable download.

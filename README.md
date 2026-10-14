@@ -6,6 +6,24 @@ The in-game interface is in Turkish (all strings in `src/i18n/tr.ts`).
 
 ## Run
 
+### One step (Windows, macOS, Linux)
+
+Clone the repository and start the launcher for your system:
+
+| System | Start |
+| --- | --- |
+| Windows 10/11 | double-click `BASLAT-Windows.bat` |
+| macOS | double-click `BASLAT-Mac.command` (or run it in Terminal) |
+| Linux | `./BASLAT-Linux.sh` |
+
+Nothing has to be installed first. When Node.js is missing or too old, the launcher downloads a portable Node.js 22 into `.tools/` (checked against a pinned SHA-256; no admin rights, nothing installed system-wide). It then installs the npm packages, builds the game, serves it on http://127.0.0.1:4173 and opens the default browser. The first start downloads about 100 MB and takes a few minutes. Later starts take a few seconds and rebuild only when the sources changed. The launcher window keeps the game server running; close it or press Ctrl+C to stop.
+
+Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
+
+If macOS refuses to open the file (for example after downloading the ZIP instead of cloning), right-click it and choose Open, or run `sh BASLAT-Mac.command` in Terminal. If Windows SmartScreen asks, choose "More info" and then "Run anyway".
+
+### Manual
+
 Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a desktop browser with WebGL2 (current Chrome, Edge or Firefox).
 
 ```bash
@@ -92,6 +110,8 @@ Numbers from each run are written to `test-results/*.json`. Software GL in a san
 ## Project layout
 
 ```
+BASLAT-*            one-step launchers (Windows .bat, macOS .command, Linux .sh)
+scripts/            launcher logic: Node.js check and portable download, install, build, serve
 src/
   app.ts            screen flow, settings, HUD/minimap/audio updates
   game.ts           composition root: loop, simulation, camera views, rendering

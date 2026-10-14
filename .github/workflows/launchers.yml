@@ -1,0 +1,71 @@
+name: Launchers
+
+# Starts the game with the one-step launchers (BASLAT-*) on Windows, macOS and
+# Linux: once with the Node.js the runner already has and once forcing the
+# portable Node.js download, each followed by a second start that must reuse
+# the installed packages and the build. --check starts the server, fetches the
+# page and every file it links, and exits.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BASLAT-*'
+      - 'scripts/**'
+      - 'package-lock.json'
+      - '.gitattributes'
+      - '.github/workflows/launchers.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    name: ${{ matrix.os }}, ${{ matrix.node }} Node.js
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-11-arm, macos-latest, macos-15-intel, ubuntu-latest, ubuntu-24.04-arm]
+        node: [system, portable]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      SKYTHREAD_NODE: ${{ matrix.node == 'portable' && 'portable' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: First start (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call BASLAT-Windows.bat --check
+
+      - name: First start (macOS)
+        if: runner.os == 'macOS'
+        run: ./BASLAT-Mac.command --check
+
+      - name: First start (Linux)
+        if: runner.os == 'Linux'
+        run: ./BASLAT-Linux.sh --check
+
+      - name: Second start reuses Node.js, packages and build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $out = cmd /c BASLAT-Windows.bat --check 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Output $out
+          if ($code -ne 0) { throw "launcher exit code $code" }
+          if ($out -notmatch 'Kontrol') { throw 'no successful check' }
+          if ($out -match 'indiriliyor|kuruluyor|derleniyor') { throw 'second start repeated setup work' }
+
+      - name: Second start reuses Node.js, packages and build (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then out=$(./BASLAT-Mac.command --check 2>&1); else out=$(./BASLAT-Linux.sh --check 2>&1); fi
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -q 'Kontrol'
+          if printf '%s\n' "$out" | grep -Eq 'indiriliyor|kuruluyor|derleniyor'; then echo 'second start repeated setup work'; exit 1; fi
+
+      - name: Portable Node.js is in .tools
+        if: matrix.node == 'portable'
+        shell: bash
+        run: ls .tools/node
