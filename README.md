@@ -20,7 +20,7 @@ Nothing has to be installed first. When Node.js is missing or too old, the launc
 
 Options (pass them on the command line): `--dev` (dev server with hot reload), `--no-open`, `--rebuild`, `--reinstall`, `--check` (start, check that the page is served, exit). `SKYTHREAD_NODE=portable` ignores an installed Node.js. Deleting `.tools/` removes the portable Node.js.
 
-If macOS refuses to open the file (for example after downloading the ZIP instead of cloning), right-click it and choose Open, or run `sh BASLAT-Mac.command` in Terminal. If Windows SmartScreen asks, choose "More info" and then "Run anyway".
+A downloaded ZIP (instead of a clone) can trigger a security prompt. On macOS, run `sh BASLAT-Mac.command` in Terminal, or allow the file under System Settings > Privacy & Security. On Windows, choose "More info" and then "Run anyway".
 
 ### Manual
 

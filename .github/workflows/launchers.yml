@@ -31,7 +31,7 @@ jobs:
     env:
       SKYTHREAD_NODE: ${{ matrix.node == 'portable' && 'portable' || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: First start (Windows)
         if: runner.os == 'Windows'
