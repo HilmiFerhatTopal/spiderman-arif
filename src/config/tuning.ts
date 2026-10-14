@@ -67,13 +67,15 @@ export const tuning = {
     gravityScale: 0.74,
     pumpAccel: 10,
     /** Pumping fades out between pumpMaxSpeed and +10 m/s: W cruises, skill goes faster. */
-    pumpMaxSpeed: 34,
+    pumpMaxSpeed: 27,
     sideAccel: 9,
     brakeAccel: 6,
     steerRate: 0.9,
     catchEfficiency: 0.92,
     catchThreshold: 1.5,
     reelSpeed: 16,
+    /** Rope length at attach as a fraction of the distance: <1 gives a gentle lift. */
+    attachLengthFactor: 0.93,
     reelStep: 2.0,
     reelRange: 9,
     /** Pull-in speed when the anchor was further than maxRope. */
@@ -129,7 +131,7 @@ export const tuning = {
     range: 72,
     minDistance: 5,
     idealDistance: 36,
-    idealElevationDeg: 48,
+    idealElevationDeg: 52,
     maxAimAngleDeg: 78,
     weightAngle: 1.0,
     weightDistance: 0.35,
@@ -227,6 +229,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'swing.catchEfficiency': [0, 1, 0.01],
   'swing.catchThreshold': [0, 10, 0.1],
   'swing.reelSpeed': [1, 50, 0.5],
+  'swing.attachLengthFactor': [0.6, 1, 0.01],
   'swing.reelStep': [0.5, 6, 0.1],
   'swing.reelRange': [0, 20, 0.5],
   'swing.pullInSpeed': [1, 60, 0.5],

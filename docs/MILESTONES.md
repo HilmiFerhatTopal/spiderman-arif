@@ -15,7 +15,7 @@ Each milestone ends with its verification gate passing, then a git commit. Statu
 ## Status
 
 - [x] M1 — Vite/TS strict/three 0.186.1 project, 120 Hz fixed loop with interpolation, pointer-lock input, spring-arm camera, lil-gui panel over tuning.ts, greybox city, `window.__game`; gate: tsc clean, build OK, smoke test passes with a clean console, greybox screenshot viewed.
-- [ ] M2
+- [x] M2 — collision world, run/sprint/jump/vault/mantle, swing (lossless rope + arcade layer), assist targeting, zip, wall cling/climb, dive, boost, recovery, water respawn, soft boundary; gate: tests a (energy drift 0.0009 %/12 s, catch ratio 1.04, re-attach 25-58 ms), b (12 simulated min, all violation counters 0), c (99.5 %), d (city 0.3 %, park 0.45 % ground time) pass.
 - [ ] M3
 - [ ] M4
 - [ ] M5

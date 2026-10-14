@@ -3,6 +3,8 @@ import { MODE_NAMES } from '../player/player';
 import { tuning } from '../config/tuning';
 import {
   anchorAvailability,
+  catchTest,
+  reattachLatency,
   cityRoute,
   emptyBotInput,
   fuzz,
@@ -73,6 +75,8 @@ export function installTestApi(game: Game): void {
       return { ...game.layout.stats, colliders: game.world.count, park: game.layout.park, spawn: game.layout.spawn };
     },
     ropeTest: (withDrag: boolean) => ropeTest(game, withDrag),
+    catchTest: () => catchTest(game),
+    reattachLatency: () => reattachLatency(game),
     fuzz: (seed: number, seconds: number) => fuzz(game, seed, seconds),
     anchorAvailability: (seed: number, count: number) => anchorAvailability(game, seed, count),
     cityBot: (maxSeconds = 300) => traversalBot(game, 'city', cityRoute(game), maxSeconds),

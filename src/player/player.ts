@@ -103,6 +103,7 @@ interface TraverseState {
   t: number;
   dur: number;
   splitT: number;
+  landY: number;
   p0: Vector3;
   p1: Vector3;
   p2: Vector3;
@@ -241,6 +242,7 @@ export class Player {
       t: 0,
       dur: 0,
       splitT: 0,
+      landY: 0,
       p0: new Vector3(),
       p1: new Vector3(),
       p2: new Vector3(),
@@ -377,17 +379,6 @@ export class Player {
     this.nCands = this.world.gatherAabb(p.x - ex, p.y - ey, p.z - ez, p.x + ex, p.y + h + ey, p.z + ez, this.cands);
   }
 
-  private dropCandidate(id: number): void {
-    if (id < 0) return;
-    for (let k = 0; k < this.nCands; k++) {
-      if (this.cands[k] === id) {
-        this.cands[k] = this.cands[this.nCands - 1]!;
-        this.nCands--;
-        return;
-      }
-    }
-  }
-
   /**
    * Move with velocity for dt in substeps, resolving collisions. Optional
    * per-substep hook (rope constraint, gravity) runs before each move.
@@ -503,7 +494,7 @@ export class Player {
     // Wall interactions: vault, mantle, step, cling.
     if (c.wall && c.wallId >= 0) {
       const into = -(this.wish.x * c.wallNX + this.wish.z * c.wallNZ);
-      if (inp.sprint && c.wallClimbable && (into > 0.3 || -(v.x * c.wallNX + v.z * c.wallNZ) > 1)) {
+      if (inp.sprint && c.wallClimbable && (into > 0.3 || -(v.x * c.wallNX + v.z * c.wallNZ) > 1) && this.canCling(c.wallId)) {
         this.enterWall(c.wallId, c.wallNX, c.wallNZ, true);
         return;
       }
@@ -711,7 +702,7 @@ export class Player {
     if (c.wall && c.wallClimbable && inp.sprint) {
       const into = -(v.x * c.wallNX + v.z * c.wallNZ);
       const wishInto = -(this.wish.x * c.wallNX + this.wish.z * c.wallNZ);
-      if (into > 0.5 || wishInto > 0.3 || hsBefore > 4) {
+      if ((into > 0.5 || wishInto > 0.3 || hsBefore > 4) && this.canCling(c.wallId)) {
         this.enterWall(c.wallId, c.wallNX, c.wallNZ, true);
         return;
       }
@@ -771,7 +762,7 @@ export class Player {
     rope.firing = false;
     rope.attached = true;
     rope.length = Math.max(3, d);
-    rope.targetLength = clamp(d, Math.min(d, S.minRope), S.maxRope);
+    rope.targetLength = clamp(d * S.attachLengthFactor, Math.min(d, S.minRope), S.maxRope);
     rope.attachLength = rope.targetLength;
     rope.attachTime = this.time;
     rope.taut = false;
@@ -927,6 +918,8 @@ export class Player {
           rope.firing = false;
           this.setMode(MODE_AIR);
           this.events.push({ type: 'release', good: false, broken: true });
+          // Still holding: retry with the next valid anchor.
+          if (inp.swing) this.wantSwing = true;
           return;
         }
       } else {
@@ -1024,7 +1017,7 @@ export class Player {
 
     const c = this.contact;
     // Wall grab while swinging.
-    if (c.wall && c.wallClimbable && inp.sprint) {
+    if (c.wall && c.wallClimbable && inp.sprint && this.canCling(c.wallId)) {
       rope.attached = false;
       this.events.push({ type: 'release', good: false, broken: false });
       this.enterWall(c.wallId, c.wallNX, c.wallNZ, true);
@@ -1168,18 +1161,18 @@ export class Player {
     this.vel.set((dx / dist) * s, (dy / dist) * s, (dz / dist) * s);
     clearContactSummary(this.contact);
     this.gather(dt);
-    this.dropCandidate(z.ignoreA);
-    this.dropCandidate(z.ignoreB);
     const n = clamp(Math.ceil((s * dt) / tuning.sim.maxSubstepMove), 1, 16);
     const h = dt / n;
+    let touchedTarget = false;
     for (let i = 0; i < n; i++) {
       this.pos.addScaledVector(this.vel, h);
       clearContactSummary(this.subContact);
       this.world.resolveCapsule(this.pos, this.vel, tuning.body.radius, tuning.body.height, this.cands, this.nCands, this.subContact);
       this.mergeContacts();
+      if (this.subContact.anyId >= 0 && this.subContact.anyId === z.ignoreA) touchedTarget = true;
     }
-    // The target collider itself is skipped above; make sure we are not inside it.
-    if (z.ignoreA >= 0 && this.world.capsuleContact(z.ignoreA, this.pos.x, this.pos.y, this.pos.z, tuning.body.radius, tuning.body.height)) {
+    // Arrived at the target surface (we never pass through it).
+    if (touchedTarget) {
       this.finishZip(inp);
       return;
     }
@@ -1211,7 +1204,7 @@ export class Player {
       return;
     }
     // Facade hit: grab if Shift is held, else hop up and back.
-    if (z.endAction === 0 && inp.sprint && z.ignoreA >= 0 && (this.world.flags[z.ignoreA]! & F_CLIMB) !== 0) {
+    if (z.endAction === 0 && inp.sprint && z.ignoreA >= 0 && this.canCling(z.ignoreA)) {
       this.enterWall(z.ignoreA, z.nx, z.nz, false);
       return;
     }
@@ -1226,10 +1219,37 @@ export class Player {
   // Wall
   // ---------------------------------------------------------------------------
 
+  /** A wall worth clinging to: a box rising well above the feet (not a parapet you can vault). */
+  private canCling(id: number): boolean {
+    const w = this.world;
+    if (id < 0 || w.kind[id] !== BOX || (w.flags[id]! & F_CLIMB) === 0) return false;
+    let top = w.topY(id);
+    // A coplanar box stacked on top (parapet over a facade) extends the wall.
+    if (top - this.pos.y < 1.9) {
+      const o = id * 6;
+      const p = w.p;
+      const above = this.findCoplanarAny(id, p[o]!, p[o + 2]!, p[o + 3]!, p[o + 5]!, top);
+      if (above >= 0) top = w.topY(above);
+    }
+    return top - this.pos.y >= 1.9;
+  }
+
+  /** Any climbable box sitting on top of box `id` (same footprint edge region). */
+  private findCoplanarAny(id: number, minX: number, minZ: number, maxX: number, maxZ: number, top: number): number {
+    const w = this.world;
+    const n = w.gatherAabb(minX, top - 0.05, minZ, maxX, top + 0.05, maxZ, undefined, F_CLIMB);
+    for (let k = 0; k < n; k++) {
+      const o = w.queryBuf[k]!;
+      if (o === id || w.kind[o] !== BOX) continue;
+      if (Math.abs(w.p[o * 6 + 1]! - top) < 0.05) return o;
+    }
+    return -1;
+  }
+
   private enterWall(id: number, nx: number, nz: number, carryMomentum: boolean): void {
     const W = tuning.wall;
     const w = this.world;
-    if (w.kind[id] !== BOX) return;
+    if (!this.canCling(id)) return;
     // Snap the normal to the box face axis.
     if (Math.abs(nx) > Math.abs(nz)) {
       nx = Math.sign(nx);
@@ -1355,8 +1375,15 @@ export class Player {
           this.setMode(MODE_AIR);
           return;
         }
-        // Not climbing: hold just below the top.
-        this.pos.y = Math.min(this.pos.y, top - 1.55);
+        // Not climbing: hold just below the top (never into a floor).
+        const holdY = top - 1.55;
+        if (holdY < this.pos.y) {
+          if (this.contact.ground || !w.capsuleFree(this.pos.x, holdY, this.pos.z, r, tuning.body.height)) {
+            this.land(0, 0, this.contact.groundSurface);
+            return;
+          }
+          this.pos.y = holdY;
+        }
       }
     }
     // Lateral edges.
@@ -1459,14 +1486,14 @@ export class Player {
       const f = k / 4;
       const x = this.pos.x + (ex - this.pos.x) * f,
         z = this.pos.z + (ez - this.pos.z) * f;
-      const y = kind === TRAV_VAULT ? liftY : f < 1 ? liftY : ey;
-      if (!w.capsuleFree(x, y, z, r, hgt, 0)) return false;
+      if (!w.capsuleFree(x, liftY, z, r, hgt, 0)) return false;
     }
     t.kind = kind;
     t.t = 0;
     t.p0.copy(this.pos);
     t.p1.set(this.pos.x, liftY, this.pos.z);
-    t.p2.set(ex, kind === TRAV_VAULT ? liftY : ey, ez);
+    t.p2.set(ex, liftY, ez);
+    t.landY = ey;
     const rise = liftY - this.pos.y;
     const horiz = Math.hypot(ex - this.pos.x, ez - this.pos.z);
     // Split the duration between the rise and the crossing.
@@ -1522,7 +1549,10 @@ export class Player {
         this.pos.y = Math.max(this.pos.y, sup.y);
         this.setMode(MODE_GROUND);
         this.grounded = true;
-      } else this.setMode(MODE_AIR);
+      } else {
+        // Landing is lower than the lift height: drop onto it.
+        this.setMode(MODE_AIR);
+      }
     }
   }
 

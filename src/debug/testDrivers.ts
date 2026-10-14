@@ -151,6 +151,7 @@ export interface FuzzReport {
   events: Record<string, number>;
   msPerTick: number;
   insideSamples: Array<Record<string, unknown>>;
+  firstInsideHistory?: string[];
 }
 
 export function randomSpot(game: Game, rng: Rng, kind: number): Vector3 {
@@ -215,6 +216,7 @@ export function fuzz(game: Game, seed: number, seconds: number): FuzzReport {
   let yawRate = 0,
     pitchTarget = 0;
   let nextTeleport = 0;
+  const history: string[] = [];
   const anchorPos = new Vector3().copy(pl.pos);
   let noProgress = 0;
   const b = game.layout.bounds;
@@ -252,6 +254,8 @@ export function fuzz(game: Game, seed: number, seconds: number): FuzzReport {
     }
     game.rig.setLook(game.rig.yaw + yawRate / 120, game.rig.pitch + (pitchTarget - game.rig.pitch) * 0.05);
     stepWithInput(game, inp, prev);
+    history.push(`${i} ${MODE_NAMES[pl.mode]} p=${pl.pos.x.toFixed(2)},${pl.pos.y.toFixed(2)},${pl.pos.z.toFixed(2)} v=${pl.vel.x.toFixed(1)},${pl.vel.y.toFixed(1)},${pl.vel.z.toFixed(1)} in=${inp.moveX},${inp.moveY},${inp.sprint ? 'S' : ''}${inp.jump ? 'J' : ''}${inp.swing ? 'L' : ''}${inp.zip ? 'R' : ''} ev=${pl.events.map((e) => e.type).join('/')}`);
+    if (history.length > 50) history.shift();
     for (const e of pl.events) rep.events[e.type] = (rep.events[e.type] ?? 0) + 1;
     const mn = MODE_NAMES[pl.mode]!;
     rep.modeTicks[mn] = (rep.modeTicks[mn] ?? 0) + 1;
@@ -261,6 +265,7 @@ export function fuzz(game: Game, seed: number, seconds: number): FuzzReport {
     if (pen > rep.maxPenetration) rep.maxPenetration = pen;
     if (pen > 0.03) {
       rep.insideGeometry++;
+      if (!rep.firstInsideHistory) rep.firstInsideHistory = history.slice();
       if (rep.insideSamples.length < 12) {
         const dc = w.deepestContact(p.x, p.y, p.z, r, h);
         rep.insideSamples.push({
@@ -578,7 +583,14 @@ export function traversalBot(game: Game, name: string, route: Array<[number, num
       const v = pl.vel;
       // Release on the rising arc (visible cue), or when past the anchor, or after a while.
       const past = rope.attached && (v.x * (rope.anchor.x - p.x) + v.z * (rope.anchor.z - p.z)) < 0;
-      if (rope.attached && (rope.goodWindow || (past && v.y > 0 && stateT > 0.6) || stateT > 3.2)) {
+      // Swing angle from straight down: release later on the arc when low (to gain height).
+      const ax = p.x - rope.anchor.x,
+        ay = p.y + tuning.body.ropeOffset - rope.anchor.y,
+        az = p.z - rope.anchor.z;
+      const ang = (Math.acos(Math.max(-1, Math.min(1, -ay / (Math.hypot(ax, ay, az) || 1)))) * 180) / Math.PI;
+      const wantAngle = p.y < 30 ? 38 : 18;
+      const goodNow = rope.goodWindow && ang >= wantAngle;
+      if (rope.attached && (goodNow || (past && v.y > 0 && stateT > 0.8) || stateT > 3.2)) {
         if (rope.goodWindow) good++;
         inp.swing = false;
         state = 'fly';
@@ -679,3 +691,99 @@ export function parkRoute(game: Game): Array<[number, number]> {
 }
 
 void v3;
+
+// -----------------------------------------------------------------------------
+// Extra swing checks: catch conversion and re-attach latency
+// -----------------------------------------------------------------------------
+
+/** Fall onto a slack rope from directly below the anchor: speed must survive the catch. */
+export function catchTest(game: Game): Record<string, number | boolean> {
+  const pl = game.player;
+  const L = game.layout;
+  const ax = (L.park.minX + L.park.maxX) / 2,
+    az = L.pond.cz,
+    ay = 150;
+  const off = tuning.body.ropeOffset;
+  game.rig.setLook(0, 0);
+  game.snapCamera();
+  // 4 m of slack, falling at 25 m/s with a little forward drift.
+  pl.teleport(ax, ay - 26 - off, az, 0.5, -25, 0);
+  pl.debugAttach(ax, ay, az, 30);
+  pl.rope.wasTaut = false;
+  pl.rope.taut = false;
+  const inp = emptyBotInput();
+  inp.swing = true;
+  const prev = emptyBotInput();
+  prev.swing = true;
+  const before = pl.vel.length();
+  let after = 0,
+    minSpeed = 1e9;
+  for (let i = 0; i < 60; i++) {
+    stepWithInput(game, inp, prev);
+    const sp = pl.vel.length();
+    if (sp < minSpeed) minSpeed = sp;
+    if (pl.rope.taut && after === 0) after = sp;
+  }
+  return { speedBefore: before, speedAfterCatch: after, minSpeedDuring: minSpeed, ratio: after / before, stillSwinging: pl.mode === MODE_SWING };
+}
+
+/** Release a swing and immediately press again: time until the new line is attached. */
+export function reattachLatency(game: Game): Record<string, number> {
+  const pl = game.player;
+  const L = game.layout;
+  const route = cityRoute(game);
+  const start = route[0]!;
+  const out = new Vector3();
+  pl.findSafeSpot(start[0], 0.5, start[1], out);
+  const results: number[] = [];
+  const totals: number[] = [];
+  const inp = emptyBotInput();
+  const prev = emptyBotInput();
+  for (let trial = 0; trial < 8; trial++) {
+    // Fresh press each trial (release first).
+    inp.swing = false;
+    stepWithInput(game, inp, prev);
+    pl.teleport(out.x, out.y + 18 + trial * 2, out.z - trial * 40, 0, 0, -20);
+    game.rig.setLook(0, 0.35);
+    game.snapCamera();
+    inp.swing = true;
+    inp.moveY = 1;
+    let attachedAt = -1;
+    for (let i = 0; i < 120 && attachedAt < 0; i++) {
+      stepWithInput(game, inp, prev);
+      if (pl.rope.attached) attachedAt = i;
+    }
+    if (attachedAt < 0) continue;
+    for (let i = 0; i < 40; i++) stepWithInput(game, inp, prev);
+    // Release, then press again as soon as the reticle shows a valid anchor
+    // (a player re-presses when the crosshair lights up).
+    inp.swing = false;
+    stepWithInput(game, inp, prev);
+    let waited = 0;
+    while (!pl.swingTarget.valid && waited < 120) {
+      stepWithInput(game, inp, prev);
+      waited++;
+    }
+    inp.swing = true;
+    let ticks = 0;
+    while (ticks < 120) {
+      stepWithInput(game, inp, prev);
+      ticks++;
+      if (pl.rope.attached) break;
+    }
+    // Total from release to attached, including the wait for a valid reticle.
+    results.push(((ticks + 1) * 1000) / 120);
+    totals.push(((ticks + 1 + waited) * 1000) / 120);
+  }
+  void L;
+  results.sort((a, b) => a - b);
+  totals.sort((a, b) => a - b);
+  return {
+    trials: results.length,
+    minMs: results[0] ?? -1,
+    medianMs: results[Math.floor(results.length / 2)] ?? -1,
+    maxMs: results[results.length - 1] ?? -1,
+    releaseToAttachMedianMs: totals[Math.floor(totals.length / 2)] ?? -1,
+    releaseToAttachMaxMs: totals[totals.length - 1] ?? -1,
+  };
+}
