@@ -242,7 +242,8 @@ export class CharacterAnimator {
       this.rootTarget.premultiply(_q);
     }
     const snap = state === S_ROLL || (state === S_RELEASE && this.goodRelease);
-    this.rootQ.slerp(this.rootTarget, snap ? 1 : dampFactor(16, dt));
+    // Settle upright quickly on a wall so a tilted swing pose never leans into it.
+    this.rootQ.slerp(this.rootTarget, snap ? 1 : dampFactor(state === S_WALL ? 30 : 16, dt));
 
     // Hips height: crouch on landings, lower while running so the legs can reach.
     this.hipsDrop.update(0, 9, dt);
@@ -263,9 +264,12 @@ export class CharacterAnimator {
     const hips = rig.bones.hips;
     const wallW = clamp(this.weights[S_WALL]!.value, 0, 1);
     if (state === S_WALL && wallW > 0) {
-      // Pull the body flat against the wall as the cling pose blends in.
-      mesh.position.x -= p.wall.nx * 0.16 * wallW;
-      mesh.position.z -= p.wall.nz * 0.16 * wallW;
+      // Pull the body flat against the wall as the cling pose blends in and the
+      // body has turned upright (a tilted body would push its shoulders in).
+      _v.set(0, 1, 0).applyQuaternion(this.rootQ);
+      const upright = smoothstep(0.9, 0.99, _v.y);
+      mesh.position.x -= p.wall.nx * 0.16 * wallW * upright;
+      mesh.position.z -= p.wall.nz * 0.16 * wallW * upright;
     }
     hips.position.set(0, hipsY, 0);
     hips.quaternion.copy(this.rootQ);
@@ -343,7 +347,11 @@ export class CharacterAnimator {
       const mid = arm ? (side === 0 ? b.foreArmL : b.foreArmR) : side === 0 ? b.shinL : b.shinR;
       const end = arm ? (side === 0 ? b.handL : b.handR) : side === 0 ? b.footL : b.footR;
       root.getWorldPosition(_la);
-      if (w.spherePenetration(_la.x, _la.y, _la.z, 0.02, F_CANOPY) > 0) continue;
+      if (w.spherePenetration(_la.x, _la.y, _la.z, 0.02, F_CANOPY) > 0) {
+        // Shoulder or hip pressed into a ledge: cast from the chest (or pelvis) instead.
+        (arm ? b.chest : b.hips).getWorldPosition(_la);
+        if (w.spherePenetration(_la.x, _la.y, _la.z, 0.02, F_CANOPY) > 0) continue;
+      }
       end.getWorldPosition(_lw);
       // Extremity point: palm for hands, front of the toe cap (sole level) for feet.
       end.getWorldQuaternion(_q);

@@ -2,6 +2,7 @@ import { Matrix4, Vector3 } from 'three';
 import { tuning } from '../config/tuning';
 import { Rng } from '../core/rng';
 import type { Game } from '../game';
+import type { App } from '../app';
 import { BOX, CYL, F_ANCHOR, makeRayHit } from '../physics/collision';
 import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL, MODE_ZIP } from '../player/player';
 import { makeAnchorResult } from '../player/targeting';
@@ -1062,10 +1063,10 @@ export function ringTest(game: Game): Record<string, unknown> {
         rings.check(a, b, dt);
       }
     }
-    rings.onEvent = null;
     return { events, time, newBest };
   };
   const races: Array<Record<string, unknown>> = [];
+  const savedHook = rings.onEvent;
   for (let r = 0; r < rings.routes.length; r++) {
     const first = fly(r, 30);
     const faster = fly(r, 45);
@@ -1083,6 +1084,7 @@ export function ringTest(game: Game): Record<string, unknown> {
     });
   }
   out.races = races;
+  rings.onEvent = savedHook;
   // 3. Abandoned run ends quietly.
   const g0 = rings.routes[0]!.rings[0]!;
   rings.check(new Vector3(g0.x - g0.nx, g0.y - g0.ny, g0.z - g0.nz), new Vector3(g0.x + g0.nx, g0.y + g0.ny, g0.z + g0.nz), 1 / 120);
@@ -1154,4 +1156,126 @@ export function lifeTest(game: Game): Record<string, unknown> {
     pedsOnRoad: pedOnRoad,
     peds: peds.count,
   };
+}
+
+// -----------------------------------------------------------------------------
+// e. Soak: one simulated minute of mixed play per call
+// -----------------------------------------------------------------------------
+
+export function soakMinute(game: Game, app: App | undefined, minute: number): Record<string, number> {
+  const TICKS = 7200;
+  let ticks = 0;
+  const hook = (): boolean => {
+    ticks++;
+    if (ticks % 4 === 0) game.updateLife(4 / 120);
+    if (ticks % 480 === 0) game.renderOnce();
+    return ticks >= TICKS;
+  };
+  // Time of day and quality churn (a quality switch recompiles shaders, so only twice).
+  game.dayNight.setHour((minute * 2.7 + 6) % 24);
+  const qualitySwitch = minute % 10 === 9;
+  if (qualitySwitch) game.applyQuality(Math.floor(minute / 10) % 2 === 0 ? 0 : 2);
+  // Menu, pause and photo-mode churn through the real shell.
+  if (app) {
+    app.ui.showPause();
+    app.ui.showSettings();
+    app.ui.showControls();
+    app.ui.hideMenus();
+    app.ui.toast('soak');
+    app.state = 'playing';
+    app.enterPhoto();
+    game.renderOnce();
+    app.exitPhoto();
+    app.ui.showClickToResume(false);
+    game.view = 'play';
+    game.playing = true;
+  }
+  const kind = minute % 5;
+  if (kind === 0) traversalBot(game, 'city', cityRoute(game), 60, undefined, false, hook);
+  else if (kind === 2) traversalBot(game, 'park', parkRoute(game), 60, undefined, false, hook);
+  else if (kind === 3) {
+    // Ring runs (kinematic) then free swinging across the city.
+    ringTest(game);
+    traversalBot(game, 'city', cityRoute(game), 60, undefined, false, hook);
+  }
+  // Random-input fuzz fills the rest of the simulated minute.
+  let k = 0;
+  while (ticks < TICKS) {
+    fuzz(game, 1000 + minute * 31 + k++, 2);
+    ticks += 240;
+    game.updateLife(0.5);
+    if (k % 2 === 0) game.renderOnce();
+  }
+  if (qualitySwitch) game.applyQuality(1);
+  const info = game.renderer.info;
+  return {
+    ticks,
+    geometries: info.memory.geometries,
+    textures: info.memory.textures,
+    programs: info.programs?.length ?? 0,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// b2. Tunnelling: 95 m/s head-on into thin posts and walls never passes through
+// -----------------------------------------------------------------------------
+
+export function tunnelTest(game: Game, trials: number): Record<string, number> {
+  const rng = new Rng(4242);
+  const w = game.world;
+  const pl = game.player;
+  const R = tuning.body.radius;
+  let tried = 0,
+    tunneled = 0,
+    inside = 0,
+    posts = 0,
+    walls = 0;
+  const prev = emptyBotInput();
+  for (let attempt = 0; attempt < trials * 20 && tried < trials; attempt++) {
+    const id = rng.int(0, w.count - 1);
+    const kind = w.kind[id]!;
+    const o = id * 6;
+    let cx: number, cz: number, y0: number, y1: number, half: number;
+    if (kind === CYL) {
+      cx = w.p[o]!;
+      y0 = w.p[o + 1]!;
+      cz = w.p[o + 2]!;
+      y1 = w.p[o + 3]!;
+      half = w.p[o + 4]!;
+      if (half > 0.6 || y1 - y0 < 2.5) continue;
+    } else if (kind === BOX) {
+      cx = (w.p[o]! + w.p[o + 3]!) / 2;
+      cz = (w.p[o + 2]! + w.p[o + 5]!) / 2;
+      y0 = w.p[o + 1]!;
+      y1 = w.p[o + 4]!;
+      half = Math.min(w.p[o + 3]! - w.p[o]!, w.p[o + 5]! - w.p[o + 2]!) / 2;
+      if (y1 - y0 < 4 || half > 30) continue;
+    } else continue;
+    const a = rng.float() * Math.PI * 2;
+    const dx = Math.cos(a),
+      dz = Math.sin(a);
+    // Start outside along -d, aimed at the collider's axis, mid-height.
+    const startDist = (kind === CYL ? half : Math.max(w.p[o + 3]! - w.p[o]!, w.p[o + 5]! - w.p[o + 2]!) * 0.75) + R + 3;
+    const sx = cx - dx * startDist,
+      sz = cz - dz * startDist;
+    const sy = Math.max(y0 + 0.5, Math.min(y1 - 2.2, y0 + 1));
+    if (!w.capsuleFree(sx, sy, sz, R, tuning.body.height)) continue;
+    tried++;
+    if (kind === CYL) posts++;
+    else walls++;
+    pl.teleport(sx, sy, sz, dx * 95, 0, dz * 95);
+    game.prevPos.copy(pl.pos);
+    let passed = false;
+    for (let k = 0; k < 24; k++) {
+      stepWithInput(game, emptyBotInput(), prev);
+      if (w.capsulePenetration(pl.pos.x, pl.pos.y, pl.pos.z, R, tuning.body.height) > 0.05) inside++;
+      // Through the collider: beyond its far side while still within its lateral extent.
+      const along = (pl.pos.x - cx) * dx + (pl.pos.z - cz) * dz;
+      const lateral = Math.abs(-(pl.pos.x - cx) * dz + (pl.pos.z - cz) * dx);
+      if (kind === CYL ? along > half + R && lateral < half : w.capsulePenetration(pl.pos.x, pl.pos.y, pl.pos.z, R * 0.2, 0.2) > 0.3) passed = true;
+      if (pl.pos.y < y0 - 0.5 || pl.pos.y > y1) break;
+    }
+    if (passed) tunneled++;
+  }
+  return { tried, posts, walls, tunneled, insideTicks: inside };
 }

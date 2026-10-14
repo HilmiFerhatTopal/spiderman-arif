@@ -30,6 +30,8 @@ async function boot(): Promise<void> {
   const seed = seedParam ? Number(seedParam) | 0 : 1337;
   const app = new App(canvas, uiRoot);
   await app.boot(seed);
+  // Load-time marker (read by the performance check; harmless in play).
+  document.body.dataset.ready = String(Math.round(performance.now()));
   if (import.meta.env.DEV) {
     const { installTestApi } = await import('./debug/testApi');
     installTestApi(app.game, app);

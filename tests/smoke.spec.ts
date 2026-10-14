@@ -8,6 +8,12 @@ test('@quick loads, steps ticks, clean console', async ({ page }) => {
     if (m.type() === 'error' || m.type() === 'warning') problems.push(`[${m.type()}] ${m.text()}`);
   });
   page.on('pageerror', (e) => problems.push(`[pageerror] ${e.message}`));
+  // Everything is local or procedural: no request may leave the page's origin.
+  const external: string[] = [];
+  page.on('request', (r) => {
+    const u = r.url();
+    if (!u.startsWith('http://127.0.0.1:5173/') && !u.startsWith('data:') && !u.startsWith('blob:')) external.push(u);
+  });
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__game?.ready === true, null, { timeout: 120_000 });
   const res = await page.evaluate(() => {
@@ -23,5 +29,6 @@ test('@quick loads, steps ticks, clean console', async ({ page }) => {
   expect(res.after.pos.every((v: number) => Number.isFinite(v))).toBe(true);
   expect(res.frame.calls).toBeGreaterThan(0);
   console.log('smoke', JSON.stringify({ mode: res.after.mode, speed: res.after.speed, frame: res.frame }));
+  expect(external, external.join('\n')).toEqual([]);
   expect(problems, problems.join('\n')).toEqual([]);
 });

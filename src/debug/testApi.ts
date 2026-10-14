@@ -7,6 +7,8 @@ import {
   characterTest,
   lifeTest,
   ringTest,
+  soakMinute,
+  tunnelTest,
   catchTest,
   reattachLatency,
   cityRoute,
@@ -139,6 +141,8 @@ export function installTestApi(game: Game, app?: App): void {
       traversalBot(game, which, which === 'city' ? cityRoute(game) : parkRoute(game), maxSeconds, undefined, false, stop),
     characterTest: () => characterTest(game),
     ringTest: () => ringTest(game),
+    soakMinute: (minute: number) => soakMinute(game, app, minute),
+    tunnelTest: (trials = 300) => tunnelTest(game, trials),
     lifeTest: () => lifeTest(game),
     updateLife: (dt = 1 / 60) => game.updateLife(dt),
     simTiming(): { msPerTick: number; ticks: number } {

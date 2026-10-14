@@ -28,6 +28,9 @@ test('b. collision fuzz', async ({ page }) => {
     splashes: sum('splashes'),
     msPerTick: reports.reduce((a, r) => a + r.msPerTick, 0) / reports.length,
   };
+  const simTiming = await page.evaluate(() => (window as any).__game.simTiming());
+  (total as any).simMsPerTick = simTiming.msPerTick;
+  (total as any).simTicks = simTiming.ticks;
   saveResult('b-fuzz', { total, reports });
   console.log('b. fuzz total', JSON.stringify(total));
   expect(total.simulatedMinutes).toBeGreaterThanOrEqual(10);
@@ -37,5 +40,23 @@ test('b. collision fuzz', async ({ page }) => {
   expect(total.nan).toBe(0);
   expect(total.stuckOver3s).toBe(0);
   expect(total.cameraInside).toBe(0);
+  expectClean(problems);
+});
+
+// (b2) No tunnelling: head-on at 95 m/s into thin posts and walls.
+test('b2. no tunnelling at 95 m/s', async ({ page }) => {
+  const problems = await openGame(page);
+  const r = await page.evaluate(() => {
+    const g = (window as any).__game;
+    g.game.animateManual = false;
+    return g.tunnelTest(400);
+  });
+  saveResult('b2-tunnel', r);
+  console.log('b2. tunnel', JSON.stringify(r));
+  expect(r.tried).toBe(400);
+  expect(r.posts).toBeGreaterThan(50);
+  expect(r.walls).toBeGreaterThan(10);
+  expect(r.tunneled).toBe(0);
+  expect(r.insideTicks).toBe(0);
   expectClean(problems);
 });

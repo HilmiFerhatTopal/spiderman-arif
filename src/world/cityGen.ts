@@ -171,7 +171,11 @@ function addBuilding(
   const baseY = opts.baseY ?? CURB;
   const style = makeStyle(rng, district);
   const fh = style.floorHeight;
-  const floors = Math.max(3, Math.round((height - baseY) / fh));
+  // Keep every building inside its district's height band (crowns included).
+  const [bandLo, bandHi, crownReserve] = HEIGHT_BANDS[district];
+  let floors = Math.max(3, Math.round((height - baseY) / fh));
+  while (floors > 3 && baseY + floors * fh > bandHi - crownReserve) floors--;
+  while (baseY + floors * fh < bandLo) floors++;
   let H = baseY + floors * fh;
   const volumes: Volume[] = [];
   const minSide = (r: Rect): number => Math.min(rectW(r), rectD(r));
@@ -191,12 +195,9 @@ function addBuilding(
       if (top - y < fh) continue;
       volumes.push({ ...rect, minY: y, maxY: top, role: 1 });
       y = top;
+      // Setback for the next tier unless the tower is already slender.
       const next = insetRect(rect, rng.range(2, 5), rng.range(2, 5), rng.range(2, 5), rng.range(2, 5));
-      if (minSide(next) < 12) {
-        H = y;
-        break;
-      }
-      if (i < fracs.length - 1) rect = next;
+      if (i < fracs.length - 1 && minSide(next) >= 12) rect = next;
     }
     H = y;
     // Crown
@@ -427,15 +428,23 @@ function districtFor(rng: Rng, cx: number, cz: number, park: Rect): District {
   return D_LOW;
 }
 
+/** Height bands per district (min, max, reserve for crowns above the main body), metres. */
+const HEIGHT_BANDS: Record<District, [number, number, number]> = {
+  [D_LOW]: [15, 40, 0],
+  [D_MID]: [40, 100, 5],
+  [D_DOWNTOWN]: [120, 250, 12],
+  [D_WATERFRONT]: [15, 40, 0],
+};
+
 function heightFor(rng: Rng, district: District, cx: number, cz: number): number {
   if (district === D_DOWNTOWN) {
     const core = Math.exp(-(((cx - 40) / 300) ** 2) - (((cz - 470) / 210) ** 2));
     const mid = Math.exp(-(((cx + 20) / 260) ** 2) - (((cz - 30) / 130) ** 2));
     const k = clamp(Math.max(core, mid * 0.8) * 0.85 + rng.float() * 0.3, 0, 1);
-    if (rng.chance(0.18)) return rng.range(70, 115);
+    if (rng.chance(0.18)) return rng.range(70, 98);
     return lerp(120, 250, k);
   }
-  if (district === D_MID) return rng.range(40, 100);
+  if (district === D_MID) return rng.range(40, 95);
   if (district === D_WATERFRONT) return rng.range(15, 30);
   return rng.range(15, 40);
 }
@@ -938,7 +947,9 @@ export function generateCity(seed: number): CityLayout {
       let h = heightFor(lrng, blk.district, cx, cz);
       if (Math.min(rectW(fp), rectD(fp)) < 26) h = Math.min(h, 140);
       if (Math.min(rectW(fp), rectD(fp)) < 16) h = Math.min(h, 70);
-      addBuilding(ctx, fp, h, blk.district, { streetFaces: lot.faces, allowSigns: blk.district !== D_DOWNTOWN || lrng.chance(0.3) });
+      // Lower fillers between downtown towers are midrise buildings (40-100 m band).
+      const district = blk.district === D_DOWNTOWN && h < 120 ? D_MID : blk.district;
+      addBuilding(ctx, fp, h, district, { streetFaces: lot.faces, allowSigns: district !== D_DOWNTOWN || lrng.chance(0.3) });
     }
   }
 
