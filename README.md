@@ -6,7 +6,7 @@ The in-game interface is in Turkish (all strings in `src/i18n/tr.ts`).
 
 ## Run
 
-Requirements: Node.js 20 or newer (developed on 22), npm, a desktop browser with WebGL2 (current Chrome, Edge or Firefox).
+Requirements: Node.js 22.12+ or 20.19+ (Vite 8 requires one of these; developed on 22), npm, a desktop browser with WebGL2 (current Chrome, Edge or Firefox).
 
 ```bash
 npm install
