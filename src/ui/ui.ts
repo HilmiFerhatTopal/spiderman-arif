@@ -118,7 +118,7 @@ const CONTROL_ROW_ACTIONS: Partial<Record<ControlRowId, readonly Action[]>> = {
   timePause: ['timePause'],
   timeFast: ['timeFast'],
 };
-const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['swing', 'timeFast']);
+const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['timeFast']);
 const CAPTURE_MOUSE_EVENTS = ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu'] as const;
 const TOAST_MS = 1600;
 const LOADING_FADE_MS = 480;
@@ -829,6 +829,7 @@ export class UI {
           format: (v) => `${formatDecimal2(v)}${S.unitTimes}`,
         }),
         this.toggleRow('invertY', S.invertY),
+        this.toggleRow('cameraFollow', S.cameraFollow),
         this.bindingsRow(),
       ]),
       this.group(S.groupAudio, [

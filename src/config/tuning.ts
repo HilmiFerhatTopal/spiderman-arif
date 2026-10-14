@@ -61,9 +61,9 @@ export const tuning = {
     minRope: 12,
     maxRope: 60,
     maxRange: 80,
-    minHeightAbove: 6,
+    minHeightAbove: 4,
     /** Swing anchors must be at least this steep above the hand (shallow = "too low"). */
-    minElevationDeg: 22,
+    minElevationDeg: 15,
     gravityScale: 0.74,
     pumpAccel: 10,
     /** Pumping fades out between pumpMaxSpeed and +10 m/s: W cruises, skill goes faster. */
@@ -95,6 +95,15 @@ export const tuning = {
     groundLaunchForward: 5,
     landReleaseTime: 0.12,
   },
+  /** Space on a line (swing or zip): let go and spring off it like a jump. */
+  cut: {
+    up: 6.5,
+    forward: 1.5,
+    /** The forward part fades out between these speeds (the lift stays). */
+    fadeStart: 30,
+    fadeEnd: 48,
+  },
+  /** Space shortly after a zip end hop or a broken line: an air boost. */
   boost: {
     window: 0.45,
     up: 8,
@@ -106,11 +115,14 @@ export const tuning = {
     forwardAccel: 6,
   },
   zip: {
-    speed: 40,
-    accel: 170,
+    /** Top pull speed: a little above swing cruising speed. */
+    speed: 34,
+    /** The pull starts at least this fast and eases up to `speed` at `accel`. */
+    startSpeed: 10,
+    accel: 75,
     decel: 75,
     endSpeed: 9,
-    cooldown: 0.8,
+    cooldown: 0.3,
     maxRange: 80,
     hopUp: 9.5,
     hopBack: 3,
@@ -127,6 +139,11 @@ export const tuning = {
     stick: 2,
     letGoPush: 2,
   },
+  /** Crosshair aim: lines go where the centre ray hits; rays this close around it catch edges. */
+  aim: {
+    magnetismDeg: 2.5,
+  },
+  /** Wide anchor search (cone around the view). Gameplay aims with the crosshair; test bots use this to pick where to look. */
   assist: {
     range: 72,
     minDistance: 5,
@@ -146,6 +163,8 @@ export const tuning = {
     armFast: 5.8,
     armSpeedRef: 50,
     armDampOut: 3.5,
+    /** Rate (1/s) at which a tree crown pulls the arm in; buildings cut it instantly. */
+    armSoftIn: 18,
     fovBase: 70,
     fovMax: 95,
     fovSpeedMin: 12,
@@ -153,7 +172,18 @@ export const tuning = {
     fovDamp: 3.0,
     followFreq: 18,
     maxLag: 1.1,
-    lookAhead: 1.4,
+    /** In the air the pivot follows a low-passed velocity with a softer spring: smooth arcs and releases. */
+    airFollowFreq: 8,
+    airVelSmooth: 10,
+    maxLagAir: 1.5,
+    /** Spring stiffening with lag: frequency x (1 + lagStiffen * (lag / maxLag)^2); twice maxLag is a hard safety limit. */
+    lagStiffen: 3,
+    /** Auto-follow: with the mouse idle, yaw turns toward the travel direction while flying fast. */
+    autoYawRate: 1.2,
+    autoYawDelay: 0.9,
+    autoYawMinSpeed: 12,
+    autoYawMaxAngleDeg: 110,
+    lookAhead: 2.0,
     lookAheadDamp: 2.5,
     shakeHardLanding: 0.32,
     shakeDuration: 0.45,
@@ -246,6 +276,10 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'swing.groundLaunchUp': [0, 25, 0.5],
   'swing.groundLaunchForward': [0, 20, 0.5],
   'swing.landReleaseTime': [0, 1, 0.01],
+  'cut.up': [0, 20, 0.1],
+  'cut.forward': [0, 15, 0.1],
+  'cut.fadeStart': [0, 100, 1],
+  'cut.fadeEnd': [0, 120, 1],
   'boost.window': [0, 1.5, 0.01],
   'boost.up': [0, 25, 0.5],
   'boost.forward': [0, 25, 0.5],
@@ -253,6 +287,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'dive.steerRate': [0, 8, 0.1],
   'dive.forwardAccel': [0, 30, 0.5],
   'zip.speed': [10, 80, 0.5],
+  'zip.startSpeed': [0, 40, 0.5],
   'zip.accel': [20, 500, 5],
   'zip.decel': [10, 300, 5],
   'zip.endSpeed': [0, 30, 0.5],
@@ -270,6 +305,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'wall.jumpForward': [0, 25, 0.5],
   'wall.stick': [0, 10, 0.1],
   'wall.letGoPush': [0, 10, 0.1],
+  'aim.magnetismDeg': [0, 8, 0.1],
   'assist.range': [20, 120, 1],
   'assist.minDistance': [0, 30, 0.5],
   'assist.idealDistance': [10, 80, 0.5],
@@ -286,6 +322,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'camera.armFast': [1.5, 16, 0.1],
   'camera.armSpeedRef': [5, 100, 1],
   'camera.armDampOut': [0.5, 20, 0.1],
+  'camera.armSoftIn': [1, 120, 1],
   'camera.fovBase': [40, 100, 1],
   'camera.fovMax': [50, 120, 1],
   'camera.fovSpeedMin': [0, 60, 1],
@@ -293,6 +330,14 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'camera.fovDamp': [0.1, 20, 0.1],
   'camera.followFreq': [2, 60, 0.5],
   'camera.maxLag': [0, 5, 0.05],
+  'camera.airFollowFreq': [1, 40, 0.5],
+  'camera.airVelSmooth': [0.5, 40, 0.5],
+  'camera.maxLagAir': [0, 6, 0.05],
+  'camera.lagStiffen': [0, 20, 0.1],
+  'camera.autoYawRate': [0, 6, 0.05],
+  'camera.autoYawDelay': [0, 3, 0.05],
+  'camera.autoYawMinSpeed': [0, 60, 1],
+  'camera.autoYawMaxAngleDeg': [0, 180, 1],
   'camera.lookAhead': [0, 5, 0.05],
   'camera.lookAheadDamp': [0.1, 20, 0.1],
   'camera.shakeHardLanding': [0, 2, 0.01],

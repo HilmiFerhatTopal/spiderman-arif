@@ -32,10 +32,19 @@ export function copyAnchor(dst: AnchorResult, src: AnchorResult): void {
 }
 
 const MAX_CANDS = 40;
+/** Magnetism rings around the aim: [fraction of magnetismDeg, rays, phase]. */
+const RINGS: ReadonlyArray<readonly [number, number, number]> = [
+  [0.5, 4, Math.PI / 4],
+  [1, 8, 0],
+];
 
 /**
- * Web targeting. Primary: the camera centre ray. Assist: the best anchorable
- * surface point in a forward and upward biased cone, never through geometry.
+ * Web targeting. Gameplay aims with the crosshair (`aim`): a line goes where
+ * the camera centre ray hits, and when that point is unusable a ring of rays
+ * within `tuning.aim.magnetismDeg` catches edges and thin trunks; with nothing
+ * usable there is no line. `plan` is the wide search: the best anchorable
+ * point in a forward and upward biased cone, never through geometry. Test bots
+ * use it to decide where to look before they click.
  */
 export class Targeting {
   private readonly hit: RayHit = makeRayHit();
@@ -97,10 +106,128 @@ export class Targeting {
   }
 
   /**
-   * Find an anchor. `feet` is the player position, the hand is above it.
+   * Swing (`swing`) and pull-line (`zip`) targets under the crosshair; one set
+   * of rays serves both. `p*` is the player's feet, `ao*`/`ad*` the camera
+   * centre ray.
+   */
+  aim(
+    px: number,
+    py: number,
+    pz: number,
+    aox: number,
+    aoy: number,
+    aoz: number,
+    adx: number,
+    ady: number,
+    adz: number,
+    swing: AnchorResult,
+    zip: AnchorResult,
+  ): void {
+    swing.valid = false;
+    zip.valid = false;
+    this.aimRay(px, py, pz, aox, aoy, aoz, adx, ady, adz, false, swing, zip);
+    const mag = tuning.aim.magnetismDeg * DEG;
+    if ((swing.valid && zip.valid) || mag <= 0) return;
+    // Basis perpendicular to the aim (u horizontal unless looking straight up or down).
+    let ux = -adz,
+      uy = 0,
+      uz = adx;
+    let ul = Math.hypot(ux, uz);
+    if (ul < 1e-3) {
+      ux = 1;
+      uz = 0;
+      ul = 1;
+    }
+    ux /= ul;
+    uz /= ul;
+    const wx = ady * uz - adz * uy,
+      wy = adz * ux - adx * uz,
+      wz = adx * uy - ady * ux;
+    // Inner ring of 4, outer ring of 8: the closest usable ray wins.
+    for (const [frac, n, phase] of RINGS) {
+      const ca = Math.cos(mag * frac),
+        sa = Math.sin(mag * frac);
+      for (let k = 0; k < n; k++) {
+        const th = phase + (k / n) * Math.PI * 2;
+        const ct = Math.cos(th),
+          st = Math.sin(th);
+        this.aimRay(
+          px,
+          py,
+          pz,
+          aox,
+          aoy,
+          aoz,
+          adx * ca + (ux * ct + wx * st) * sa,
+          ady * ca + (uy * ct + wy * st) * sa,
+          adz * ca + (uz * ct + wz * st) * sa,
+          true,
+          swing,
+          zip,
+        );
+      }
+      if (swing.valid && zip.valid) return;
+    }
+  }
+
+  /** One aim ray: fills whichever of the two results is still empty if the hit point suits it. */
+  private aimRay(
+    px: number,
+    py: number,
+    pz: number,
+    aox: number,
+    aoy: number,
+    aoz: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    magnet: boolean,
+    swing: AnchorResult,
+    zip: AnchorResult,
+  ): void {
+    const w = this.world;
+    const hy = py + tuning.body.ropeOffset;
+    const camToHand = Math.hypot(px - aox, hy - aoy, pz - aoz);
+    const range = camToHand + Math.max(tuning.swing.maxRange, tuning.zip.maxRange);
+    if (!w.raycast(aox, aoy, aoz, dx, dy, dz, range, this.hit)) return;
+    const h = this.hit;
+    if (h.id < 0 || (w.flags[h.id]! & F_ANCHOR) === 0) return;
+    let los = -1;
+    for (const mode of [0, 1] as const) {
+      const out = mode === 0 ? swing : zip;
+      if (out.valid || !this.usable(mode, h, px, py, pz)) continue;
+      if (los < 0) los = this.lineOfSight(px, hy, pz, h.x, h.y, h.z, h.id) ? 1 : 0;
+      if (los === 0) return;
+      out.valid = true;
+      out.x = h.x;
+      out.y = h.y;
+      out.z = h.z;
+      out.nx = h.nx;
+      out.ny = h.ny;
+      out.nz = h.nz;
+      out.id = h.id;
+      out.dist = Math.hypot(h.x - px, h.y - hy, h.z - pz);
+      out.assisted = magnet;
+    }
+  }
+
+  /** Range, height, steepness, facing and face rules for a hit point (line of sight is checked separately). */
+  private usable(mode: 0 | 1, h: RayHit, px: number, py: number, pz: number): boolean {
+    const S = tuning.swing;
+    const hy = py + tuning.body.ropeOffset;
+    const d = Math.hypot(h.x - px, h.y - hy, h.z - pz);
+    if (d > (mode === 0 ? S.maxRange : tuning.zip.maxRange) || d < 2.5 || h.y <= 1.6) return false;
+    if (h.nx * (px - h.x) + h.ny * (hy - h.y) + h.nz * (pz - h.z) <= -0.2) return false;
+    if (mode === 1) return true;
+    return h.ny < 0.7 && h.y >= py + S.minHeightAbove && h.y - hy >= Math.sin(S.minElevationDeg * DEG) * d;
+  }
+
+  /**
+   * Wide anchor search: the centre ray if it is usable, otherwise the best
+   * point in the assist cone. `p*` is the player's feet, the hand is above it.
    * `mode` 0 = swing, 1 = zip.
    */
-  find(
+  plan(
     mode: 0 | 1,
     px: number,
     py: number,
@@ -127,33 +254,18 @@ export class Targeting {
     const camToHand = Math.hypot(hx - aox, hy - aoy, hz - aoz);
     if (w.raycast(aox, aoy, aoz, adx, ady, adz, camToHand + maxRange, this.hit)) {
       const h = this.hit;
-      if (h.id >= 0 && (w.flags[h.id]! & F_ANCHOR) !== 0) {
-        const d = Math.hypot(h.x - hx, h.y - hy, h.z - hz);
-        const facesPlayer = h.nx * (hx - h.x) + h.ny * (hy - h.y) + h.nz * (hz - h.z) > -0.2;
-        const topFaceOk = mode === 1 || h.ny < 0.7;
-        const elevOk = mode === 1 || (h.y - hy) >= Math.sin(S.minElevationDeg * DEG) * d;
-        if (
-          d <= maxRange &&
-          d >= 2.5 &&
-          elevOk &&
-          h.y >= py + minAbove &&
-          h.y > 1.6 &&
-          facesPlayer &&
-          topFaceOk &&
-          this.lineOfSight(hx, hy, hz, h.x, h.y, h.z, h.id)
-        ) {
-          out.valid = true;
-          out.x = h.x;
-          out.y = h.y;
-          out.z = h.z;
-          out.nx = h.nx;
-          out.ny = h.ny;
-          out.nz = h.nz;
-          out.id = h.id;
-          out.dist = d;
-          out.assisted = false;
-          return true;
-        }
+      if (h.id >= 0 && (w.flags[h.id]! & F_ANCHOR) !== 0 && this.usable(mode, h, px, py, pz) && this.lineOfSight(hx, hy, hz, h.x, h.y, h.z, h.id)) {
+        out.valid = true;
+        out.x = h.x;
+        out.y = h.y;
+        out.z = h.z;
+        out.nx = h.nx;
+        out.ny = h.ny;
+        out.nz = h.nz;
+        out.id = h.id;
+        out.dist = Math.hypot(h.x - hx, h.y - hy, h.z - hz);
+        out.assisted = false;
+        return true;
       }
     }
 

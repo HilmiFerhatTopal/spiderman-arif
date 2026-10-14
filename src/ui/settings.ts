@@ -18,6 +18,8 @@ export interface Settings {
   /** Mouse sensitivity multiplier, 0.2..3. */
   sensitivity: number;
   invertY: boolean;
+  /** Camera turns toward the travel direction while flying fast with the mouse idle. */
+  cameraFollow: boolean;
   /** Volumes 0..1. */
   masterVolume: number;
   musicVolume: number;
@@ -44,7 +46,7 @@ export const SETTINGS_LIMITS = {
 } as const;
 
 export type NumericSettingKey = keyof typeof SETTINGS_LIMITS;
-export type BooleanSettingKey = 'dynamicResolution' | 'invertY' | 'showFps';
+export type BooleanSettingKey = 'dynamicResolution' | 'invertY' | 'cameraFollow' | 'showFps';
 
 /** Frozen at runtime so nothing can mutate the defaults by accident. */
 export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
@@ -54,6 +56,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   fovOffset: 0,
   sensitivity: 1,
   invertY: false,
+  cameraFollow: true,
   masterVolume: 0.8,
   musicVolume: 0.6,
   sfxVolume: 0.8,
@@ -101,6 +104,7 @@ export function sanitizeSettings(data: unknown): Settings {
     fovOffset: num('fovOffset'),
     sensitivity: num('sensitivity'),
     invertY: boolOr(o.invertY, d.invertY),
+    cameraFollow: boolOr(o.cameraFollow, d.cameraFollow),
     masterVolume: num('masterVolume'),
     musicVolume: num('musicVolume'),
     sfxVolume: num('sfxVolume'),

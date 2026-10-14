@@ -279,6 +279,7 @@ export class App {
     game.rig.fovOffset = s.fovOffset;
     game.rig.sensitivity = s.sensitivity;
     game.rig.invertY = s.invertY;
+    game.rig.autoFollow = s.cameraFollow;
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
     game.input.setBindings(s.bindings);
     this.audio.setVolumes(s.masterVolume, s.musicVolume, s.sfxVolume);

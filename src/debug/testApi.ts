@@ -4,8 +4,10 @@ import { MODE_NAMES } from '../player/player';
 import { tuning } from '../config/tuning';
 import {
   anchorAvailability,
+  cameraFollowTest,
   characterTest,
   lifeTest,
+  lineControlsTest,
   ringTest,
   soakMinute,
   tunnelTest,
@@ -131,6 +133,8 @@ export function installTestApi(game: Game, app?: App): void {
     ropeTest: (withDrag: boolean) => ropeTest(game, withDrag),
     catchTest: () => catchTest(game),
     reattachLatency: () => reattachLatency(game),
+    lineControlsTest: () => lineControlsTest(game),
+    cameraFollowTest: () => cameraFollowTest(game),
     fuzz: (seed: number, seconds: number) => fuzz(game, seed, seconds),
     anchorAvailability: (seed: number, count: number) => anchorAvailability(game, seed, count),
     cityBot: (maxSeconds = 300) => traversalBot(game, 'city', cityRoute(game), maxSeconds),

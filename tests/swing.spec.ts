@@ -1,12 +1,16 @@
 import { test, expect } from '@playwright/test';
 import { expectClean, openGame, saveResult } from './helpers';
 
-// (a) Rope and swing: a pendulum released from rest at 45 degrees.
+// (a) Rope and swing: a pendulum released from rest at 45 degrees, the catch,
+// chaining, and the line controls (click fires where the crosshair points and
+// holds, a second click moves the line, Space cuts with a lift, clicks at open
+// sky do nothing, the pull line eases in and Space cuts it too), and camera
+// auto-follow.
 test('a. rope and swing behave as designed', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => {
     const g = (window as any).__game;
-    return { noDrag: g.ropeTest(false), withDrag: g.ropeTest(true), catch: g.catchTest(), reattach: g.reattachLatency() };
+    return { noDrag: g.ropeTest(false), withDrag: g.ropeTest(true), catch: g.catchTest(), reattach: g.reattachLatency(), lines: g.lineControlsTest(), magnetismDeg: g.tuning.aim.magnetismDeg, follow: g.cameraFollowTest() };
   });
   saveResult('a-swing', r);
   console.log('a. swing', JSON.stringify(r, null, 1));
@@ -29,8 +33,28 @@ test('a. rope and swing behave as designed', async ({ page }) => {
   // Catch: falling onto the line keeps most of the speed (no stall).
   expect(r.catch.stillSwinging).toBe(true);
   expect(r.catch.ratio).toBeGreaterThan(0.85);
-  // Chaining: release and re-press attaches again in under 150 ms.
+  // Chaining: cut and click again attaches in under 150 ms.
   expect(r.reattach.trials).toBeGreaterThanOrEqual(4);
   expect(r.reattach.maxMs).toBeLessThan(150);
+  // Line controls.
+  const l = r.lines;
+  expect(l.planned).toBe(true);
+  expect(l.attached).toBe(true);
+  expect(l.anchorAngleDeg).toBeLessThanOrEqual(r.magnetismDeg + 0.05);
+  expect(l.stillAttachedAfter1s).toBe(true);
+  expect(l.refireMoved).toBe(true);
+  expect(l.cutToAir).toBe(true);
+  expect(l.cutEvent).toBe(true);
+  expect(l.cutLift).toBeGreaterThan(5);
+  expect(l.skyClickFired).toBe(false);
+  expect(l.zipPlanned).toBe(true);
+  expect(l.zipMode).toBe(true);
+  expect(l.zipStartSpeed).toBeLessThan(20);
+  expect(l.zipSpeed200ms).toBeGreaterThan(l.zipStartSpeed);
+  expect(l.zipCut).toBe(true);
+  expect(l.zipCutLift).toBeGreaterThan(5);
+  // Camera auto-follow turns toward the travel direction (and stays put when switched off).
+  expect(r.follow.afterTwoSecondsOn).toBeLessThan(40);
+  expect(r.follow.afterTwoSecondsOff).toBeGreaterThan(85);
   expectClean(problems);
 });

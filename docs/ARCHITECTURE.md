@@ -12,13 +12,13 @@ This document is the plan the code follows. It is written before the code and ke
 
 | Folder | Responsibility |
 | --- | --- |
-| `config/tuning.ts` | Every gameplay constant (movement, swing, zip, wall, camera, assist, recovery) with UI metadata (min/max/step) for the debug panel. Single source of truth. |
+| `config/tuning.ts` | Every gameplay constant (movement, swing, line cut, zip, wall, camera, aim, assist, recovery) with UI metadata (min/max/step) for the debug panel. Single source of truth. |
 | `config/quality.ts` | Render quality presets (Low/Medium/High/Ultra): shadow size, densities, view distance, post effects. |
 | `i18n/tr.ts` | All in-game UI text (Turkish). |
 | `core/` | Fixed-timestep loop, seeded RNG, math helpers (critically damped springs, easing), event bus. |
 | `input/` | Keyboard and mouse state, pointer lock, per-tick edge detection, mouse wheel; rebindable action bindings (`bindings.ts`: actions, defaults, validation, conflict-free assignment). |
 | `physics/` | Collider storage (struct-of-arrays), uniform spatial grid, capsule resolution, raycast, sphere cast, point tests, terrain and water queries. |
-| `player/` | Player simulation: state machine (ground, air, swing, zip, wall, traverse), rope constraint, anchor targeting with assist, stuck detection and recovery, world-edge handling. Pure simulation, no rendering. |
+| `player/` | Player simulation: state machine (ground, air, swing, zip, wall, traverse), rope constraint, crosshair targeting (plus the wide anchor search bots use), stuck detection and recovery, world-edge handling. Pure simulation, no rendering. |
 | `camera/` | Spring-arm third-person camera with collision, FOV by speed, look-ahead, landing shake. |
 | `world/` | City layout generator (grid, districts, park, waterfront, bridge), building generator (base/body/crown, setbacks, trims, rooftop props, signage), trees, street dressing, geometry builder, chunked render meshes, sky, day-night, water. |
 | `render/` | Renderer setup, cel materials (MeshToonMaterial patched through `onBeforeCompile`), post pipeline (MRT color+normal+depth, outline composite, speed lines, FXAA), dynamic resolution. |
@@ -89,14 +89,16 @@ Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinemati
 
 - Rope is an inequality constraint on the rope point (feet + 2.0 m): slack when closer than the rope length, taut otherwise. When taut: project the position onto the sphere and remove only outward radial velocity.
 - Arcade layer: reduced gravity while taut, tangential force from input toward the camera direction, gentle heading steering that preserves speed, soft speed cap with drag above 60 m/s, catch conversion (when the rope snaps taut, most of the removed radial speed is redirected tangentially so falling into a swing never stalls), automatic ground clearance (the rope reels in so the arc bottom stays above ground), hands alternate, good-release window on the rising part of the arc with a launch bonus and a visible cue.
-- Attach latency: a fired line reaches the anchor in at most 60 ms; holding LMB with no anchor keeps retrying every tick, so re-attach after release is under 150 ms.
-- Line of sight from the hand to the anchor is checked every tick; when blocked the rope releases gracefully and, if LMB is still held, re-targets.
+- Controls: a left click fires a line at the crosshair target and the line holds until something ends it; clicking again replaces it with a line to the newly aimed point. Space cuts a swing or pull line and springs off like a jump (`cut.up`, a small forward push that fades out at speed); a cut inside the good-release window also gets the launch bonus. The right click starts the pull line, which eases in from `zip.startSpeed` to `zip.speed` and can be cut the same way.
+- Attach latency: a fired line reaches the anchor in at most 60 ms, so a cut followed by a click is attached again in well under 150 ms.
+- Line of sight from the hand to the anchor is checked every tick; when blocked the rope releases gracefully (no automatic re-fire).
 
 ## 6. Targeting
 
-1. Ray from the camera through the crosshair. A hit within 80 m of the player on an anchorable surface, with clear line of sight from the hand and (for swings) at least 6 m above the player, becomes the anchor.
-2. Otherwise the assist examines anchorable colliders within 70 m: for each it takes the closest surface point to an ideal point placed forward and upward along the aim, scores candidates by aim angle, distance band (20-70 m), height gain and surface type, and line-of-sight checks the best few. Never through geometry.
+1. Ray from the camera through the crosshair. A hit within 80 m of the player on an anchorable surface, facing the player, with clear line of sight from the hand becomes the anchor; swing anchors must also be at least 4 m above the feet and 15 degrees above the hand, and not a roof top.
+2. When that point is not usable, rays on two rings around the crosshair (half and full `aim.magnetismDeg`, 4 and 8 rays) try again, closest ring first, so building edges and thin trunks still catch. One set of rays fills both the swing and the pull-line target. Nothing usable means no line.
 3. The result drives the reticle (valid anchor highlighted with a marker at the anchor, invalid dimmed).
+4. The wide search (`Targeting.plan`) examines anchorable colliders within 72 m: for each it takes the closest surface point to an ideal point placed forward and upward along the view, scores candidates by angle, distance band, height gain and surface type, and line-of-sight checks the best few. Gameplay never uses it; the test bots use it to choose where to aim before they click, and test (c) uses it to measure anchor availability.
 
 ## 7. Rendering
 

@@ -73,7 +73,7 @@ test('i. key bindings: rebinding, conflicts, persistence and gameplay', async ({
   expect((await bindings(page)).forward).toEqual(['KeyK', 'ArrowUp']);
 
   // --- Conflict: K on Zıpla's empty slot is taken from İleri ---------------------------
-  await slot(page, 'Zıpla', 2, 'boş').click();
+  await slot(page, 'Zıpla / ipi kes', 2, 'boş').click();
   await page.keyboard.press('KeyK');
   await expect(toast(page)).toHaveText('K tuşu “İleri” atamasından alındı');
   let b = await bindings(page);
