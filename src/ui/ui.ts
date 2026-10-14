@@ -13,6 +13,15 @@ import {
 import { Hud } from './hud';
 import { Minimap } from './minimap';
 import {
+  DEFAULT_BINDINGS,
+  MOUSE_BUTTONS,
+  assignBinding,
+  isBindableCode,
+  mouseCode,
+  type Action,
+} from '../input/bindings';
+import { keyLabel, learnKey, loadKeyboardLayout, primaryLabel, slotLabels } from './keyLabels';
+import {
   clamp,
   el,
   formatClock,
@@ -72,9 +81,17 @@ export interface PhotoOptions {
   onExit: () => void;
 }
 
-type MenuScreen = 'main' | 'pause' | 'controls' | 'settings';
-type SubScreen = 'controls' | 'settings';
+type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings';
+type SubScreen = 'controls' | 'settings' | 'bindings';
 type UiSound = 'click' | 'hover';
+type ControlRowId = (typeof tr.controls.rows)[number][0];
+
+interface BindingSlotView {
+  action: Action;
+  slot: 0 | 1;
+  btn: HTMLButtonElement;
+  text: Text;
+}
 
 interface SliderSpec {
   min: number;
@@ -85,7 +102,24 @@ interface SliderSpec {
   format: (v: number) => string;
 }
 
-const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings'];
+const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings'];
+/** Movement keys in the order players read them ("W A S D"). */
+const MOVE_ACTIONS: readonly Action[] = ['forward', 'left', 'back', 'right'];
+/** Controls-screen rows whose keys come from the bindings; the others use tr.controls.fixedKeys. */
+const CONTROL_ROW_ACTIONS: Partial<Record<ControlRowId, readonly Action[]>> = {
+  move: MOVE_ACTIONS,
+  swing: ['swing'],
+  zip: ['zip'],
+  jump: ['jump'],
+  sprint: ['sprint'],
+  dive: ['dive'],
+  music: ['music'],
+  photo: ['photo'],
+  timePause: ['timePause'],
+  timeFast: ['timeFast'],
+};
+const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['swing', 'timeFast']);
+const CAPTURE_MOUSE_EVENTS = ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu'] as const;
 const TOAST_MS = 1600;
 const LOADING_FADE_MS = 480;
 const PHOTO_FOV = { min: 30, max: 110, step: 1 };
@@ -176,6 +210,23 @@ function buildKeyCaps(spec: string): HTMLSpanElement {
 }
 
 /**
+ * Key caps for bound keys: "W A S D" (no joiner), "C veya Q", "Sol tık
+ * (basılı tut)"; reads "atanmadı" when nothing is bound.
+ */
+function bindingCaps(labels: readonly string[], joiner: string | null, note: string | null): HTMLSpanElement {
+  const wrap = el('span', 'sk-keys');
+  if (labels.length === 0) wrap.append(el('span', 'sk-keys-word', tr.controls.unbound));
+  labels.forEach((label, i) => {
+    if (i > 0 && joiner) wrap.append(el('span', 'sk-keys-word', joiner));
+    const k = el('kbd', 'sk-kbd', label);
+    if ([...label].length > 3) k.classList.add('sk-kbd-wide');
+    wrap.append(k);
+  });
+  if (note) wrap.append(el('span', 'sk-keys-note', note));
+  return wrap;
+}
+
+/**
  * DOM user interface: loading screen, main/pause menus, controls and settings
  * screens, HUD, rotating minimap, toasts and the photo-mode panel. All text
  * comes from src/i18n/tr.ts. The game drives it through the public members.
@@ -209,11 +260,19 @@ export class UI {
   private readonly photoFovVal: Text;
   private readonly photoTime: HTMLInputElement;
   private readonly photoTimeVal: Text;
+  private readonly photoExitLabel: HTMLElement;
+  private readonly photoHint: HTMLElement;
   private readonly settingSyncers: Array<() => void> = [];
+  private readonly controlsTables: HTMLDivElement = el('div', 'sk-ctl-tables');
+  private readonly bindingSlots: BindingSlotView[] = [];
 
   private screen: MenuScreen | null = null;
-  private returnTo: 'main' | 'pause' | null = null;
-  private invoker: HTMLElement | null = null;
+  /** Screens to return to with Back, each with the button that opened the next one. */
+  private readonly backStack: Array<{ screen: MenuScreen; focus: HTMLElement | null }> = [];
+  /** Slot waiting for a key or mouse button on the bindings screen. */
+  private capture: BindingSlotView | null = null;
+  /** The mouse press that filled a slot: its mouseup/click must not reach the buttons below. */
+  private swallowClick = false;
   /** Bumped by every screen change, so button defaults can tell whether a callback already navigated. */
   private screenVersion = 0;
   private keyboardMode = false;
@@ -252,6 +311,8 @@ export class UI {
     this.photoFovVal = photo.fovVal;
     this.photoTime = photo.time;
     this.photoTimeVal = photo.timeVal;
+    this.photoExitLabel = photo.exitLabel;
+    this.photoHint = photo.hint;
 
     const main = this.buildMain();
     this.audioHint = main.audioHint;
@@ -260,6 +321,7 @@ export class UI {
       pause: this.buildPause(),
       controls: this.buildControls(),
       settings: this.buildSettings(),
+      bindings: this.buildBindings(),
     };
     this.menuLayer = el('div', 'sk-menu-layer');
     for (const name of SCREEN_NAMES) this.menuLayer.append(this.screens[name]);
@@ -275,6 +337,16 @@ export class UI {
 
     window.addEventListener('resize', this.onResize);
     window.addEventListener('pointerdown', this.onPointerDown, true);
+    // Key captions follow the player's keyboard layout (see keyLabels.ts).
+    window.addEventListener(
+      'keydown',
+      (e) => {
+        if (learnKey(e) && (this.screen !== null || this.photo !== null)) this.refreshKeyViews();
+      },
+      true,
+    );
+    this.refreshKeyViews();
+    this.reloadKeyboardLayout();
     this.onResize();
     this.setLoading(0, '');
   }
@@ -312,28 +384,26 @@ export class UI {
   // ------------------------------------------------------------------ menus
 
   showMainMenu(): void {
-    this.returnTo = null;
+    this.backStack.length = 0;
     this.setScreen('main', null);
   }
 
   showPause(): void {
-    this.returnTo = null;
+    this.backStack.length = 0;
     this.setScreen('pause', null);
   }
 
   hideMenus(): void {
-    this.returnTo = null;
-    this.invoker = null;
+    this.backStack.length = 0;
     this.setScreen(null, null);
   }
 
   showControls(): void {
-    this.enterSub('controls');
+    this.enterSub('controls', null);
   }
 
   showSettings(): void {
-    this.syncSettings();
-    this.enterSub('settings');
+    this.enterSub('settings', null);
   }
 
   showClickToResume(show: boolean): void {
@@ -444,30 +514,33 @@ export class UI {
     if (version === this.screenVersion) fallback();
   }
 
-  private enterSub(target: SubScreen): void {
-    if (this.screen === 'main' || this.screen === 'pause') this.returnTo = this.screen;
-    else if (this.screen === null) this.returnTo = null;
+  /** Opens a sub screen on top of the current one; Back returns there and refocuses `invoker`. */
+  private enterSub(target: SubScreen, invoker: HTMLElement | null): void {
+    if (target === 'settings') this.syncSettings();
+    else {
+      this.refreshKeyViews();
+      this.reloadKeyboardLayout();
+    }
+    if (this.screen !== null && this.screen !== target) this.backStack.push({ screen: this.screen, focus: invoker });
     this.setScreen(target, null);
   }
 
   private openSub(target: SubScreen, invoker: HTMLElement): void {
-    this.invoker = invoker;
-    if (target === 'controls') this.showControls();
-    else this.showSettings();
+    this.enterSub(target, invoker);
   }
 
   private back(): void {
-    const to = this.returnTo;
-    const focus = this.invoker;
-    this.invoker = null;
-    this.returnTo = null;
-    this.setScreen(to, focus);
+    const prev = this.backStack.pop();
+    this.setScreen(prev ? prev.screen : null, prev ? prev.focus : null);
   }
 
   private setScreen(next: MenuScreen | null, focusTarget: HTMLElement | null): void {
     this.screenVersion++;
     const open = next !== null;
     if (next !== this.screen) {
+      if (this.screen === 'bindings') this.setBindingsMouse(false);
+      if (next === 'bindings') this.setBindingsMouse(true);
+      if (this.capture) this.endCapture();
       const active = document.activeElement;
       if (active instanceof HTMLElement && this.menuLayer.contains(active)) active.blur();
       for (const name of SCREEN_NAMES) this.screens[name].classList.toggle('is-active', name === next);
@@ -508,8 +581,15 @@ export class UI {
   private readonly onMenuKey = (e: KeyboardEvent): void => {
     const screen = this.screen;
     if (screen === null) return;
+    if (this.capture) {
+      // Rebinding: the next key belongs to the slot and never reaches the game.
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) this.onCaptureKey(e);
+      return;
+    }
     const key = e.key;
-    if ((key === 'Escape' || key === 'Backspace') && (screen === 'controls' || screen === 'settings')) {
+    if ((key === 'Escape' || key === 'Backspace') && (screen === 'controls' || screen === 'settings' || screen === 'bindings')) {
       // Handled here: keep it from also reaching the game's own Esc handling.
       e.preventDefault();
       e.stopPropagation();
@@ -521,6 +601,11 @@ export class UI {
       return;
     }
     const container = this.screens[screen];
+    if (screen === 'bindings' && key.startsWith('Arrow') && this.moveSlotFocus(key, container)) {
+      e.preventDefault();
+      this.keyboardMode = true;
+      return;
+    }
     if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Tab') {
       // Up/Down move between rows (Left/Right still adjust sliders and options).
       e.preventDefault();
@@ -644,33 +729,50 @@ export class UI {
   private buildControls(): HTMLDivElement {
     const screen = el('div', 'sk-screen sk-screen-sub');
     const panel = el('section', 'sk-center sk-panel sk-panel-wide');
-    const tables = el('div', 'sk-ctl-tables');
-    const rows = tr.controls.rows;
-    const half = Math.ceil(rows.length / 2);
-    for (const part of [rows.slice(0, half), rows.slice(half)]) {
-      if (part.length === 0) continue;
-      const table = el('table', 'sk-ctl-table');
-      const body = el('tbody');
-      for (const [keys, action] of part) {
-        const row = el('tr');
-        const th = el('th');
-        th.scope = 'row';
-        th.append(buildKeyCaps(keys));
-        row.append(th, el('td', '', action));
-        body.append(row);
-      }
-      table.append(body);
-      tables.append(table);
-    }
     const tips = el('div', 'sk-tips');
     const list = el('ul');
     for (const tip of tr.controls.tips) list.append(el('li', '', tip));
     tips.append(el('h3', 'sk-tips-title', tr.controls.tipsTitle), list);
-    const actions = el('div', 'sk-actions sk-actions-end');
-    actions.append(this.backButton());
-    panel.append(this.panelTitle(tr.controls.title), tables, tips, actions);
+    const actions = el('div', 'sk-actions');
+    actions.append(
+      this.button(tr.controls.rebind, 'is-small is-ghost', (b) => this.openSub('bindings', b)),
+      this.backButton(),
+    );
+    panel.append(this.panelTitle(tr.controls.title), this.controlsTables, tips, actions);
     screen.append(panel);
     return screen;
+  }
+
+  /** Fills the two controls tables from the current bindings. */
+  private renderControls(): void {
+    const rows = tr.controls.rows;
+    const half = Math.ceil(rows.length / 2);
+    const tables: HTMLTableElement[] = [];
+    for (const part of [rows.slice(0, half), rows.slice(half)]) {
+      if (part.length === 0) continue;
+      const table = el('table', 'sk-ctl-table');
+      const body = el('tbody');
+      for (const [id, text] of part) {
+        const row = el('tr');
+        const th = el('th');
+        th.scope = 'row';
+        th.append(this.controlKeys(id));
+        row.append(th, el('td', '', text));
+        body.append(row);
+      }
+      table.append(body);
+      tables.push(table);
+    }
+    this.controlsTables.replaceChildren(...tables);
+  }
+
+  private controlKeys(id: ControlRowId): HTMLSpanElement {
+    const actions = CONTROL_ROW_ACTIONS[id];
+    if (!actions) return buildKeyCaps(tr.controls.fixedKeys[id as keyof typeof tr.controls.fixedKeys]);
+    const b = this.settings.bindings;
+    if (actions.length > 1) return bindingCaps(actions.map((a) => primaryLabel(b[a]) ?? tr.bindings.empty), null, null);
+    const action = actions[0]!;
+    return bindingCaps(slotLabels(b[action]), tr.controls.or, HOLD_ROWS.has(id) ? tr.controls.hold : null);
   }
 
   // --------------------------------------------------------------- settings
@@ -727,6 +829,7 @@ export class UI {
           format: (v) => `${formatDecimal2(v)}${S.unitTimes}`,
         }),
         this.toggleRow('invertY', S.invertY),
+        this.bindingsRow(),
       ]),
       this.group(S.groupAudio, [
         this.sliderRow('masterVolume', S.master, pct('masterVolume')),
@@ -760,10 +863,19 @@ export class UI {
     this.onSettingsChange(this.settings);
   }
 
+  /** Resets this screen's settings; key bindings have their own reset on the bindings screen. */
   private resetSettings(): void {
-    Object.assign(this.settings, DEFAULT_SETTINGS);
+    Object.assign(this.settings, DEFAULT_SETTINGS, { bindings: this.settings.bindings });
     this.syncSettings();
     this.commitSettings();
+  }
+
+  private bindingsRow(): HTMLElement {
+    const row = el('div', 'sk-st-row');
+    const ctrl = el('div', 'sk-st-ctrl');
+    ctrl.append(this.button(tr.bindings.open, 'is-small', (b) => this.openSub('bindings', b)));
+    row.append(el('span', 'sk-st-label', tr.bindings.settingLabel), ctrl);
+    return row;
   }
 
   private sliderRow(key: NumericSettingKey, label: string, spec: SliderSpec): HTMLElement {
@@ -889,6 +1001,171 @@ export class UI {
     this.commitSettings();
   }
 
+  // ------------------------------------------------------------ key bindings
+
+  private buildBindings(): HTMLDivElement {
+    const screen = el('div', 'sk-screen sk-screen-sub');
+    const panel = el('section', 'sk-center sk-panel sk-panel-wide');
+    const B = tr.bindings;
+    const rows = (actions: readonly Action[]): HTMLElement[] => actions.map((a) => this.bindingRow(a));
+    const cols = el('div', 'sk-st-cols');
+    const left = el('div', 'sk-st-col');
+    const right = el('div', 'sk-st-col');
+    left.append(this.group(B.groupMove, rows(['forward', 'back', 'left', 'right', 'jump', 'sprint', 'dive'])));
+    right.append(
+      this.group(B.groupWeb, rows(['swing', 'zip'])),
+      this.group(B.groupOther, rows(['music', 'photo', 'timePause', 'timeFast'])),
+    );
+    cols.append(left, right);
+    const actions = el('div', 'sk-actions');
+    actions.append(this.button(B.reset, 'is-small is-ghost', () => this.resetBindings()), this.backButton());
+    panel.append(this.panelTitle(B.title), el('p', 'sk-bd-help', B.help), cols, el('p', 'sk-bd-fixed', B.fixed), actions);
+    screen.append(panel);
+    return screen;
+  }
+
+  private bindingRow(action: Action): HTMLElement {
+    const row = el('div', 'sk-st-row');
+    const slots = el('div', 'sk-bd-slots');
+    for (const slot of [0, 1] as const) {
+      const btn = el('button', 'sk-bd-slot');
+      btn.type = 'button';
+      const key = el('span', 'sk-bd-key');
+      const view: BindingSlotView = { action, slot, btn, text: textNode(key) };
+      btn.append(key);
+      btn.addEventListener('mouseenter', () => this.sound('hover'));
+      btn.addEventListener('click', () => {
+        this.sound('click');
+        this.capture = view;
+        this.syncBindings();
+      });
+      this.bindingSlots.push(view);
+      slots.append(btn);
+    }
+    row.append(el('span', 'sk-st-label', tr.bindings.actions[action]), slots);
+    return row;
+  }
+
+  private syncBindings(): void {
+    const B = tr.bindings;
+    const b = this.settings.bindings;
+    for (const v of this.bindingSlots) {
+      const code = b[v.action][v.slot];
+      const capturing = this.capture === v;
+      const label = code === null ? null : keyLabel(code);
+      setText(v.text, capturing ? B.press : (label ?? B.empty));
+      v.btn.classList.toggle('is-capturing', capturing);
+      v.btn.classList.toggle('is-empty', !capturing && code === null);
+      v.btn.setAttribute('aria-label', B.slotAria(B.actions[v.action], v.slot + 1, capturing ? B.press : (label ?? B.emptyAria)));
+    }
+  }
+
+  /** Re-renders every text that names a bound key. */
+  private refreshKeyViews(): void {
+    this.syncBindings();
+    this.renderControls();
+    this.syncPhotoKeys();
+  }
+
+  private reloadKeyboardLayout(): void {
+    void loadKeyboardLayout().then((changed) => {
+      if (changed) this.refreshKeyViews();
+    });
+  }
+
+  private endCapture(): void {
+    this.capture = null;
+    this.syncBindings();
+  }
+
+  /** Stores `code` (null = empty) in the slot being captured, saves and applies it. */
+  private finishCapture(code: string | null): void {
+    const view = this.capture;
+    if (!view) return;
+    this.capture = null;
+    const { bindings, takenFrom } = assignBinding(this.settings.bindings, view.action, view.slot, code);
+    this.settings.bindings = bindings;
+    this.commitSettings();
+    this.refreshKeyViews();
+    this.sound('click');
+    if (code !== null && takenFrom) this.toast(tr.bindings.taken(keyLabel(code), tr.bindings.actions[takenFrom]));
+  }
+
+  private onCaptureKey(e: KeyboardEvent): void {
+    const code = e.code;
+    if (code === 'Escape') {
+      this.sound('click');
+      this.endCapture();
+    } else if (code === 'Backspace' || code === 'Delete') {
+      this.finishCapture(null);
+    } else if (isBindableCode(code)) {
+      this.finishCapture(code);
+    } else {
+      this.toast(tr.bindings.reserved(code ? keyLabel(code) : e.key));
+    }
+  }
+
+  private setBindingsMouse(on: boolean): void {
+    for (const type of CAPTURE_MOUSE_EVENTS) {
+      if (on) window.addEventListener(type, this.onBindingsMouse, true);
+      else window.removeEventListener(type, this.onBindingsMouse, true);
+    }
+    this.swallowClick = false;
+  }
+
+  /** Mouse buttons fill the waiting slot; the press must not also click the button under the cursor. */
+  private readonly onBindingsMouse = (e: MouseEvent): void => {
+    if (e.type === 'contextmenu') {
+      e.preventDefault();
+      return;
+    }
+    if (e.type === 'mousedown') {
+      this.swallowClick = false;
+      if (!this.capture || e.button >= MOUSE_BUTTONS) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.swallowClick = true;
+      this.finishCapture(mouseCode(e.button));
+      return;
+    }
+    if (!this.swallowClick) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type !== 'mouseup') this.swallowClick = false;
+  };
+
+  /** Arrow keys on a slot: Left/Right between the two slots, Up/Down along the column. */
+  private moveSlotFocus(key: string, container: HTMLElement): boolean {
+    const slots = this.bindingSlots;
+    const i = slots.findIndex((v) => v.btn === document.activeElement);
+    if (i < 0) return false;
+    let j = i;
+    if (key === 'ArrowLeft') j = i - (i % 2);
+    else if (key === 'ArrowRight') j = i - (i % 2) + 1;
+    else if (key === 'ArrowDown') j = i + 2;
+    else if (key === 'ArrowUp') j = i - 2;
+    else return false;
+    let target: HTMLElement | undefined = slots[j]?.btn;
+    if (!target) {
+      // Past the last row: on to the buttons below; above the first row: wrap to the last control.
+      const items = this.focusables(container);
+      const k = items.indexOf(slots[i]!.btn);
+      target = key === 'ArrowDown' ? items.find((node, n) => n > k && !slots.some((v) => v.btn === node)) : items[items.length - 1];
+    }
+    if (target && target !== document.activeElement) {
+      target.focus();
+      this.sound('hover');
+    }
+    return true;
+  }
+
+  private resetBindings(): void {
+    this.capture = null;
+    this.settings.bindings = DEFAULT_BINDINGS;
+    this.commitSettings();
+    this.refreshKeyViews();
+  }
+
   // ------------------------------------------------------------- photo panel
 
   private buildPhoto(): {
@@ -897,6 +1174,8 @@ export class UI {
     fovVal: Text;
     time: HTMLInputElement;
     timeVal: Text;
+    exitLabel: HTMLElement;
+    hint: HTMLElement;
   } {
     const panel = el('aside', 'sk-panel sk-photo');
     const title = el('h2', 'sk-title');
@@ -915,6 +1194,12 @@ export class UI {
     fov.input.addEventListener('input', onInput);
     time.input.addEventListener('input', onInput);
     const actions = el('div', 'sk-photo-actions');
+    const exit = this.button(tr.photo.exit(null), 'is-small', () => {
+      const p = this.photo;
+      if (!p) return;
+      p.onExit();
+      this.hidePhoto();
+    });
     actions.append(
       this.button(tr.photo.save, 'is-primary is-small', (b) => {
         // Mouse users get focus back on the canvas side; keyboard users keep their place.
@@ -924,15 +1209,22 @@ export class UI {
         p.onSave();
         this.toast(tr.photo.saved);
       }),
-      this.button(tr.photo.exit, 'is-small', () => {
-        const p = this.photo;
-        if (!p) return;
-        p.onExit();
-        this.hidePhoto();
-      }),
+      exit,
     );
-    panel.append(title, fov.row, time.row, actions, el('p', 'sk-photo-hint', tr.photo.hint));
-    return { panel, fov: fov.input, fovVal: fov.val, time: time.input, timeVal: time.val };
+    const hint = el('p', 'sk-photo-hint');
+    panel.append(title, fov.row, time.row, actions, hint);
+    const exitLabel = exit.querySelector<HTMLElement>('.sk-btn-label') ?? exit;
+    return { panel, fov: fov.input, fovVal: fov.val, time: time.input, timeVal: time.val, exitLabel, hint };
+  }
+
+  /** Photo panel texts that name keys: the exit button and the free-camera hint. */
+  private syncPhotoKeys(): void {
+    const b = this.settings.bindings;
+    const key = (a: Action): string => primaryLabel(b[a]) ?? tr.bindings.empty;
+    const move = MOVE_ACTIONS.map(key);
+    const moveText = move.every((m) => [...m].length === 1) ? move.join('') : move.join(' ');
+    this.photoExitLabel.textContent = tr.photo.exit(primaryLabel(b.photo));
+    this.photoHint.textContent = tr.photo.hint(moveText, key('jump'), key('dive'), key('sprint'));
   }
 
   private photoSlider(

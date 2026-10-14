@@ -5,6 +5,7 @@ import { AudioEngine, type AudioListenerState } from './audio/audio';
 import { tr } from './i18n/tr';
 import { clamp, smoothstep } from './core/math';
 import { MODE_SWING, MODE_ZIP, type PlayerEvent } from './player/player';
+import type { Action } from './input/bindings';
 
 export type AppState = 'loading' | 'menu' | 'playing' | 'paused' | 'photo';
 
@@ -102,6 +103,7 @@ export class App {
     };
     window.addEventListener('pointerdown', unlock, true);
     window.addEventListener('keydown', unlock, true);
+    game.input.onAction((action, e) => this.onAction(action, e));
     window.addEventListener('keydown', (e) => this.onKey(e));
     this.canvas.addEventListener('click', () => {
       if (this.state === 'playing' || this.state === 'photo') game.input.requestLock();
@@ -229,35 +231,40 @@ export class App {
     }
   }
 
-  private onKey(e: KeyboardEvent): void {
-    if (e.repeat || this.state === 'loading') return;
-    if (e.target instanceof HTMLInputElement && e.code !== 'KeyP' && e.code !== 'KeyM') return;
+  /** Hotkeys bound in the settings: music, photo mode and the day-night pause. */
+  private onAction(action: Action, e: KeyboardEvent | MouseEvent): void {
+    if (this.state === 'loading') return;
+    // A focused slider keeps its keys; only the music and photo toggles pass through.
+    if (e.target instanceof HTMLInputElement && action !== 'photo' && action !== 'music') return;
     const game = this.game;
-    switch (e.code) {
-      case 'KeyM': {
+    switch (action) {
+      case 'music': {
         const muted = this.audio.toggleMusic();
         this.ui.toast(muted ? tr.hud.musicOff : tr.hud.musicOn);
         break;
       }
-      case 'KeyP':
+      case 'photo':
         if (this.state === 'photo') this.exitPhoto();
         else this.enterPhoto();
         break;
-      case 'KeyT':
+      case 'timePause':
         if (this.state === 'playing') {
           game.dayNight.paused = !game.dayNight.paused;
           this.ui.toast(game.dayNight.paused ? tr.hud.timePaused : tr.hud.timeRunning);
         }
         break;
-      case 'Escape':
-        // Esc while locked is consumed by the browser (lock loss pauses); this
-        // covers play without a lock and closing the pause menu.
-        if (this.state === 'playing' && document.pointerLockElement !== this.canvas) this.pause();
-        else if (this.state === 'paused' && this.ui.menuOpen) this.resume();
-        break;
       default:
         break;
     }
+  }
+
+  /** Esc is fixed: the browser also uses it to release the pointer lock. */
+  private onKey(e: KeyboardEvent): void {
+    if (e.repeat || this.state === 'loading' || e.code !== 'Escape' || e.target instanceof HTMLInputElement) return;
+    // Esc while locked is consumed by the browser (lock loss pauses); this
+    // covers play without a lock and closing the pause menu.
+    if (this.state === 'playing' && document.pointerLockElement !== this.canvas) this.pause();
+    else if (this.state === 'paused' && this.ui.menuOpen) this.resume();
   }
 
   // ------------------------------------------------------------- settings
@@ -273,6 +280,7 @@ export class App {
     game.rig.sensitivity = s.sensitivity;
     game.rig.invertY = s.invertY;
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
+    game.input.setBindings(s.bindings);
     this.audio.setVolumes(s.masterVolume, s.musicVolume, s.sfxVolume);
   }
 

@@ -1,4 +1,5 @@
 import { Vector3 } from 'three';
+import { DEFAULT_BINDINGS, MOUSE_BUTTONS, actionsForCode, mouseCode, type Action, type Bindings } from './bindings';
 
 /** Snapshot of the player's intent for one simulation tick. */
 export interface TickInput {
@@ -45,29 +46,20 @@ export function emptyTickInput(): TickInput {
   };
 }
 
-export const KEYS = {
-  forward: ['KeyW', 'ArrowUp'],
-  back: ['KeyS', 'ArrowDown'],
-  left: ['KeyA', 'ArrowLeft'],
-  right: ['KeyD', 'ArrowRight'],
-  jump: ['Space'],
-  sprint: ['ShiftLeft', 'ShiftRight'],
-  dive: ['KeyC', 'KeyQ'],
-} as const;
-
-type ActionKey = keyof typeof KEYS;
-
 /**
- * Keyboard and mouse state with pointer lock. Edges (press/release) are
- * latched until the next simulation tick consumes them, so short taps between
- * ticks are never lost.
+ * Keyboard and mouse state with pointer lock, read through the player's
+ * bindings (src/input/bindings.ts). Keys and mouse buttons share one code
+ * space (`KeyW`, `Mouse0`). Edges (press/release) are latched until the next
+ * simulation tick consumes them, so short taps between ticks are never lost.
  */
 export class Input {
+  /** Held input codes: keys and `MouseN` buttons. */
   private held = new Set<string>();
   private pressedSinceTick = new Set<string>();
-  private mouseHeld = [false, false, false];
-  private mousePressedSinceTick = [false, false, false];
-  private mouseReleasedSinceTick = [false, false, false];
+  private releasedSinceTick = new Set<string>();
+  private bindings: Bindings = DEFAULT_BINDINGS;
+  /** Every bound code; their browser defaults are suppressed while playing. */
+  private bound = new Set<string>();
   private wheelAcc = 0;
   mouseDX = 0;
   mouseDY = 0;
@@ -75,6 +67,7 @@ export class Input {
   /** Gameplay input is ignored while false (menus open). */
   enabled = false;
   private keyListeners: Array<(code: string, e: KeyboardEvent) => void> = [];
+  private actionListeners: Array<(action: Action, e: KeyboardEvent | MouseEvent) => void> = [];
   private settleUntil = 0;
   private settleEvents = 0;
   private lockListeners: Array<(locked: boolean) => void> = [];
@@ -88,14 +81,31 @@ export class Input {
     window.addEventListener('mousemove', this.onMouseMove);
     element.addEventListener('wheel', this.onWheel, { passive: false });
     element.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Middle-click paste and the back/forward side buttons must not act while playing.
+    window.addEventListener('auxclick', (e) => {
+      if (this.pointerLocked) e.preventDefault();
+    });
+    this.setBindings(DEFAULT_BINDINGS);
     document.addEventListener('pointerlockchange', this.onLockChange);
     document.addEventListener('pointerlockerror', () => {
       this.pointerLocked = false;
     });
   }
 
+  /** Raw key presses (fixed keys such as the debug panel and time-of-day presets). */
   onKey(listener: (code: string, e: KeyboardEvent) => void): void {
     this.keyListeners.push(listener);
+  }
+
+  /** Presses of bound actions, from keys or (while the pointer is locked) mouse buttons. */
+  onAction(listener: (action: Action, e: KeyboardEvent | MouseEvent) => void): void {
+    this.actionListeners.push(listener);
+  }
+
+  setBindings(b: Bindings): void {
+    this.bindings = b;
+    this.bound.clear();
+    for (const slots of Object.values(b)) for (const code of slots) if (code !== null) this.bound.add(code);
   }
 
   onLock(listener: (locked: boolean) => void): void {
@@ -120,18 +130,25 @@ export class Input {
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
-  keyHeld(code: string): boolean {
-    return this.held.has(code);
-  }
-
-  isHeld(action: ActionKey): boolean {
-    for (const code of KEYS[action]) if (this.held.has(code)) return true;
+  isHeld(action: Action): boolean {
+    for (const code of this.bindings[action]) if (code !== null && this.held.has(code)) return true;
     return false;
   }
 
-  private wasPressed(action: ActionKey): boolean {
-    for (const code of KEYS[action]) if (this.pressedSinceTick.has(code)) return true;
+  private wasPressed(action: Action): boolean {
+    for (const code of this.bindings[action]) if (code !== null && this.pressedSinceTick.has(code)) return true;
     return false;
+  }
+
+  /** A bound code went up since the last tick and no other code of the action is still held. */
+  private wasReleased(action: Action): boolean {
+    let released = false;
+    for (const code of this.bindings[action]) {
+      if (code === null) continue;
+      if (this.releasedSinceTick.has(code)) released = true;
+      else if (this.held.has(code)) return false;
+    }
+    return released;
   }
 
   /** Fill a tick snapshot from live device state and clear latched edges. */
@@ -147,17 +164,16 @@ export class Input {
     out.jumpPressed = on && this.wasPressed('jump');
     out.sprint = on && this.isHeld('sprint');
     out.dive = on && this.isHeld('dive');
-    out.swing = on && this.mouseHeld[0]!;
-    out.swingPressed = on && this.mousePressedSinceTick[0]!;
-    out.swingReleased = on && this.mouseReleasedSinceTick[0]!;
-    out.zip = on && this.mouseHeld[2]!;
-    out.zipPressed = on && this.mousePressedSinceTick[2]!;
+    out.swing = on && this.isHeld('swing');
+    out.swingPressed = on && this.wasPressed('swing');
+    out.swingReleased = on && this.wasReleased('swing');
+    out.zip = on && this.isHeld('zip');
+    out.zipPressed = on && this.wasPressed('zip');
     out.reel = on ? this.wheelAcc : 0;
     out.yaw = yaw;
     out.pitch = pitch;
     this.pressedSinceTick.clear();
-    this.mousePressedSinceTick.fill(false);
-    this.mouseReleasedSinceTick.fill(false);
+    this.releasedSinceTick.clear();
     this.wheelAcc = 0;
   }
 
@@ -171,12 +187,15 @@ export class Input {
   clearAll(): void {
     this.held.clear();
     this.pressedSinceTick.clear();
-    this.mouseHeld.fill(false);
-    this.mousePressedSinceTick.fill(false);
-    this.mouseReleasedSinceTick.fill(false);
+    this.releasedSinceTick.clear();
     this.wheelAcc = 0;
     this.mouseDX = 0;
     this.mouseDY = 0;
+  }
+
+  private dispatch(code: string, e: KeyboardEvent | MouseEvent): void {
+    if (this.actionListeners.length === 0) return;
+    for (const action of actionsForCode(this.bindings, code)) for (const l of this.actionListeners) l(action, e);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -185,35 +204,39 @@ export class Input {
       e.code.startsWith('Arrow') ||
       e.code === 'Backquote' ||
       e.code === 'Tab' ||
-      (this.pointerLocked && (e.code === 'KeyS' || e.code === 'KeyD' || e.code === 'KeyW'));
+      (this.pointerLocked && this.bound.has(e.code));
     if (gameKey && !(e.target instanceof HTMLInputElement)) e.preventDefault();
     if (!e.repeat) {
       this.held.add(e.code);
       this.pressedSinceTick.add(e.code);
       for (const l of this.keyListeners) l(e.code, e);
+      this.dispatch(e.code, e);
     }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
-    this.held.delete(e.code);
+    if (this.held.delete(e.code)) this.releasedSinceTick.add(e.code);
   };
 
   private onBlur = (): void => {
     this.held.clear();
-    this.mouseHeld.fill(false);
   };
 
   private onMouseDown = (e: MouseEvent): void => {
-    if (e.button > 2) return;
-    if (!this.pointerLocked) return;
-    this.mouseHeld[e.button] = true;
-    this.mousePressedSinceTick[e.button] = true;
+    if (e.button >= MOUSE_BUTTONS || !this.pointerLocked) return;
+    // Middle-button autoscroll and side-button navigation start on press.
+    if (e.button === 1 || e.button >= 3) e.preventDefault();
+    const code = mouseCode(e.button);
+    this.held.add(code);
+    this.pressedSinceTick.add(code);
+    this.dispatch(code, e);
   };
 
   private onMouseUp = (e: MouseEvent): void => {
-    if (e.button > 2) return;
-    if (this.mouseHeld[e.button]) this.mouseReleasedSinceTick[e.button] = true;
-    this.mouseHeld[e.button] = false;
+    if (e.button >= MOUSE_BUTTONS) return;
+    if (this.pointerLocked && e.button >= 3) e.preventDefault();
+    const code = mouseCode(e.button);
+    if (this.held.delete(code)) this.releasedSinceTick.add(code);
   };
 
   private onMouseMove = (e: MouseEvent): void => {
@@ -243,7 +266,7 @@ export class Input {
     this.settleUntil = performance.now() + 150;
     this.settleEvents = 2;
     if (!this.pointerLocked) {
-      this.mouseHeld.fill(false);
+      for (let b = 0; b < MOUSE_BUTTONS; b++) this.held.delete(mouseCode(b));
       this.mouseDX = 0;
       this.mouseDY = 0;
     }

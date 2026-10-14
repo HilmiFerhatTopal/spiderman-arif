@@ -369,7 +369,7 @@ export class Game {
       this.updateCamera(frameDt);
       this.updateHero(frameDt);
       this.updateLife(frameDt);
-      this.timeFast = this.input.enabled && this.input.keyHeld('KeyY');
+      this.timeFast = this.input.enabled && this.input.isHeld('timeFast');
       if (!this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
     } else {
       // Paused under a menu: the frame holds still.
@@ -427,10 +427,13 @@ export class Game {
       fz = -Math.cos(pc.yaw) * Math.cos(pc.pitch);
     const rx = Math.cos(pc.yaw),
       rz = -Math.sin(pc.yaw);
-    const f = (k.keyHeld('KeyW') ? 1 : 0) - (k.keyHeld('KeyS') ? 1 : 0);
-    const r = (k.keyHeld('KeyD') ? 1 : 0) - (k.keyHeld('KeyA') ? 1 : 0);
-    const u = (k.keyHeld('Space') ? 1 : 0) - (k.keyHeld('KeyC') ? 1 : 0);
-    const speed = (k.keyHeld('ShiftLeft') || k.keyHeld('ShiftRight') ? 40 : 10) * Math.min(dt, 0.1);
+    // The free camera flies with the movement bindings: jump/dive for up/down, sprint for speed.
+    // Keys typed into a focused panel slider adjust the slider, not the camera.
+    const keys = !(document.activeElement instanceof HTMLInputElement);
+    const f = keys ? (k.isHeld('forward') ? 1 : 0) - (k.isHeld('back') ? 1 : 0) : 0;
+    const r = keys ? (k.isHeld('right') ? 1 : 0) - (k.isHeld('left') ? 1 : 0) : 0;
+    const u = keys ? (k.isHeld('jump') ? 1 : 0) - (k.isHeld('dive') ? 1 : 0) : 0;
+    const speed = (k.isHeld('sprint') ? 40 : 10) * Math.min(dt, 0.1);
     pc.pos.x += (fx * f + rx * r) * speed;
     pc.pos.y += (fy * f + u) * speed;
     pc.pos.z += (fz * f + rz * r) * speed;

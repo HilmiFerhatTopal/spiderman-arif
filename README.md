@@ -60,7 +60,9 @@ Click **Oyna** (Play) to start; the game captures the mouse (pointer lock). Audi
 | Esc | Pause menu |
 | ` (backtick) | Debug and tuning panel |
 
-Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is held (see `docs/DECISIONS.md`).
+These are the default keys. Every action except Esc, mouse look, the wheel, 1–4 and ` can be rebound under **Ayarlar > Tuş atamaları** (Settings > Key bindings): two keys or mouse buttons per action, saved in the browser. The controls screen and the photo panel always show the current keys, named after the player's keyboard layout (Turkish Q and F layouts included).
+
+Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is held (see `docs/DECISIONS.md`); Ctrl, Alt, Cmd/Windows, Tab and F1–F12 cannot be bound for the same reason.
 
 Tips: release on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved.
 
@@ -103,6 +105,7 @@ npm run test:quick               # smoke test only
 | f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry, bones stay finite |
 | g `ui.spec.ts` | Settings round trip and corrupt storage, audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export |
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
+| i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
 
 Numbers from each run are written to `test-results/*.json`. Software GL in a sandbox does not represent real GPU frame rates, so the suite measures simulation time per tick, draw calls, triangles and memory instead of FPS.
@@ -117,6 +120,7 @@ src/
   game.ts           composition root: loop, simulation, camera views, rendering
   config/           tuning.ts (all gameplay constants), quality.ts (render presets)
   core/             fixed-step loop, seeded RNG, math helpers
+  input/            keyboard and mouse state, rebindable key bindings
   physics/          analytic collision world (boxes, cylinders, ellipsoids, terrain, water), grid, raycasts
   player/           player state machine, rope constraint, targeting with assist
   camera/           spring-arm camera with collision

@@ -5,6 +5,8 @@
  * clamped, so a corrupt or hand-edited entry can never break the game.
  */
 
+import { DEFAULT_BINDINGS, sanitizeBindings, type Bindings } from '../input/bindings';
+
 export interface Settings {
   /** 0 Low, 1 Medium, 2 High, 3 Ultra. */
   quality: 0 | 1 | 2 | 3;
@@ -23,6 +25,8 @@ export interface Settings {
   /** Real-time minutes for one full day-night cycle, 2..60. */
   dayLengthMinutes: number;
   showFps: boolean;
+  /** Key and mouse bindings (see src/input/bindings.ts); replaced, never mutated. */
+  bindings: Bindings;
 }
 
 export const SETTINGS_KEY = 'skythread.settings.v1';
@@ -55,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   sfxVolume: 0.8,
   dayLengthMinutes: 12,
   showFps: false,
+  bindings: DEFAULT_BINDINGS,
 });
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -101,6 +106,7 @@ export function sanitizeSettings(data: unknown): Settings {
     sfxVolume: num('sfxVolume'),
     dayLengthMinutes: num('dayLengthMinutes'),
     showFps: boolOr(o.showFps, d.showFps),
+    bindings: sanitizeBindings(o.bindings),
   };
 }
 
