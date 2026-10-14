@@ -3,7 +3,7 @@ import { tuning } from '../config/tuning';
 import { Rng } from '../core/rng';
 import type { Game } from '../game';
 import { BOX, CYL, F_ANCHOR } from '../physics/collision';
-import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL } from '../player/player';
+import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL, MODE_ZIP } from '../player/player';
 import { makeAnchorResult } from '../player/targeting';
 
 /** Injected input for tests; booleans are levels, edges are derived per tick. */
@@ -492,7 +492,15 @@ export interface BotReport {
 }
 
 /** Follow a polyline route by swinging. Uses only player inputs plus visible cues. */
-export function traversalBot(game: Game, name: string, route: Array<[number, number]>, maxSeconds: number, startY?: number, diag = false): BotReport {
+export function traversalBot(
+  game: Game,
+  name: string,
+  route: Array<[number, number]>,
+  maxSeconds: number,
+  startY?: number,
+  diag = false,
+  stop?: () => boolean,
+): BotReport {
   const swingLog: Array<Record<string, number | string>> = [];
   let cur: { [k: string]: number | string; maxY: number; minY: number; ceil: number; wall: number; ground: number } | null = null;
   const pl = game.player;
@@ -637,6 +645,7 @@ export function traversalBot(game: Game, name: string, route: Array<[number, num
     speeds.push(pl.vel.length());
     if (pl.mode !== MODE_GROUND && pl.pos.y < minAltAir) minAltAir = pl.pos.y;
     if (ticks % 60 === 0) path.push([+pl.pos.x.toFixed(1), +pl.pos.y.toFixed(1), +pl.pos.z.toFixed(1)]);
+    if (stop && stop()) break;
   }
   const seconds = ticks / 120;
   return {
@@ -785,5 +794,172 @@ export function reattachLatency(game: Game): Record<string, number> {
     maxMs: results[results.length - 1] ?? -1,
     releaseToAttachMedianMs: totals[Math.floor(totals.length / 2)] ?? -1,
     releaseToAttachMaxMs: totals[totals.length - 1] ?? -1,
+  };
+}
+
+// -----------------------------------------------------------------------------
+// f. Character: planted feet never slide, limbs never clip into solid geometry
+// -----------------------------------------------------------------------------
+
+export function characterTest(game: Game): Record<string, number | string | boolean | Record<string, number>> {
+  const pl = game.player;
+  const an = game.animator;
+  const L = game.layout;
+  an.diagnostics = true;
+  let steps = 0;
+  an.onFootstep = () => {
+    steps++;
+  };
+  // 1. Locomotion on an open avenue: idle, walk, run, sprint, curves, stops, zig-zags.
+  const ave = L.avenues[2]!.center;
+  const s0 = L.streets[L.streets.length - 2]!.center;
+  const out = new Vector3();
+  if (!pl.findSafeSpot(ave, 0.5, s0 - 30, out)) out.set(ave, 0.1, s0 - 30);
+  pl.teleport(out.x, out.y, out.z);
+  game.rig.setLook(0, -0.1);
+  game.snapCamera();
+  const inp = emptyBotInput();
+  const prev = emptyBotInput();
+  const phases: Array<[number, number, number, boolean, number]> = [
+    // seconds, moveX, moveY, sprint, zigzag period
+    [2, 0, 0, false, 0],
+    [3, 0, 0.35, false, 0],
+    [3, 0, 1, false, 0],
+    [4, 0, 1, true, 0],
+    [3, 0.6, 1, true, 0],
+    [1.2, 0, 0, false, 0],
+    [3, 0, 1, false, 0.5],
+    [2, 0, 0, false, 0],
+    [3, -0.8, 0.6, false, 0],
+    [2, 0, 0, false, 0],
+  ];
+  const slideLog: string[] = [];
+  let phaseIdx = 0;
+  let slideMax = 0,
+    slideSum = 0,
+    slideFrames = 0,
+    locoFrames = 0,
+    nanBones = 0,
+    groundTicks = 0;
+  for (const [sec, mx, my, sprint, zz] of phases) {
+    phaseIdx++;
+    const n = Math.round(sec * 120);
+    for (let i = 0; i < n; i++) {
+      inp.moveX = zz > 0 ? (Math.floor(i / (zz * 120)) % 2 === 0 ? 1 : -1) * 0.8 : mx;
+      inp.moveY = my;
+      inp.sprint = sprint;
+      inp.jump = false;
+      inp.swing = false;
+      inp.zip = false;
+      stepWithInput(game, inp, prev);
+      if (pl.mode === MODE_GROUND) groundTicks++;
+      locoFrames++;
+      slideMax = Math.max(slideMax, an.plantSlide);
+      slideSum += an.plantSlide;
+      if (an.plantSlide > 0.005) {
+        slideFrames++;
+        if (slideLog.length < 40) slideLog.push(`p${phaseIdx} i${i} ${(an.plantSlide * 1000).toFixed(0)}mm v${Math.hypot(pl.vel.x, pl.vel.z).toFixed(1)} ${MODE_NAMES[pl.mode]} s${an.state}`);
+      }
+      for (const b of game.hero.mesh.skeleton.bones) {
+        const q = b.quaternion;
+        if (!Number.isFinite(q.x + q.y + q.z + q.w)) nanBones++;
+      }
+    }
+  }
+  const locomotion = {
+    seconds: locoFrames / 120,
+    groundFraction: groundTicks / Math.max(1, locoFrames),
+    footsteps: steps,
+    maxSlidePerFrameMm: slideMax * 1000,
+    totalSlideMm: slideSum * 1000,
+    framesSliding: slideFrames,
+    slideLog: slideLog.join(' | '),
+  };
+  // 2. Limb clipping while traversing the city, the park, climbing and zipping.
+  const clip = { frames: 0, over3cm: 0, max: 0, joint: '' };
+  const clipHist: Record<string, number> = {};
+  const clipLog: string[] = [];
+  const jp = new Vector3();
+  const states = new Set<number>();
+  const sample = (): boolean => {
+    clip.frames++;
+    states.add(an.state);
+    const d = an.limbPenetration;
+    if (d > 0.03) {
+      clip.over3cm++;
+      const k = `${an.limbPenetrationJoint}@${MODE_NAMES[pl.mode]}`;
+      clipHist[k] = (clipHist[k] ?? 0) + 1;
+      if (clipLog.length < 30) {
+        const j = an.limbPenetrationJoint;
+        if (j === 'handL' || j === 'handR') jp.copy(an.handPos[j === 'handL' ? 0 : 1]!);
+        else game.hero.bones[j as 'head'].getWorldPosition(jp);
+        const sup = game.world.supportHeight(jp.x, jp.z, jp.y + 0.5, 0.01);
+        clipLog.push(
+          `${k} ${(d * 100).toFixed(1)}cm j(${jp.x.toFixed(2)},${jp.y.toFixed(2)},${jp.z.toFixed(2)}) p(${pl.pos.x.toFixed(2)},${pl.pos.y.toFixed(2)},${pl.pos.z.toFixed(2)}) sup${sup.y.toFixed(2)}#${sup.id} st${an.state}`,
+        );
+      }
+    }
+    if (d > clip.max) {
+      clip.max = d;
+      clip.joint = `${an.limbPenetrationJoint}@${MODE_NAMES[pl.mode]}`;
+    }
+    for (const b of game.hero.mesh.skeleton.bones) {
+      const q = b.quaternion;
+      if (!Number.isFinite(q.x + q.y + q.z + q.w)) nanBones++;
+    }
+    return false;
+  };
+  traversalBot(game, 'city', cityRoute(game), 45, undefined, false, sample);
+  traversalBot(game, 'park', parkRoute(game), 45, undefined, false, sample);
+  // Wall climb and zip on a tall facade.
+  let wallTicks = 0,
+    zipTicks = 0;
+  for (const b of L.buildings) {
+    if (b.height < 45) continue;
+    const f = b.footprint;
+    if (f.maxX - f.minX < 16) continue;
+    const cx = (f.minX + f.maxX) / 2;
+    if (!pl.findSafeSpot(cx, 0.6, f.maxZ + 2.2, out) || Math.abs(out.z - (f.maxZ + 2.2)) > 0.5 || out.y > 1) continue;
+    pl.teleport(out.x, out.y, out.z);
+    game.rig.setLook(0, -0.05);
+    game.snapCamera();
+    Object.assign(inp, emptyBotInput(), { moveY: 1, sprint: true });
+    for (let i = 0; i < 480; i++) {
+      inp.moveX = Math.floor(i / 120) % 2 === 0 ? 0 : 0.7;
+      stepWithInput(game, inp, prev);
+      if (pl.mode === MODE_WALL) wallTicks++;
+      sample();
+    }
+    break;
+  }
+  for (let k = 0; k < 4; k++) {
+    Object.assign(inp, emptyBotInput());
+    for (let i = 0; i < 110; i++) stepWithInput(game, inp, prev);
+    game.rig.setLook(game.rig.yaw + 1.1, 0.5);
+    for (let i = 0; i < 4; i++) stepWithInput(game, inp, prev);
+    inp.zip = true;
+    stepWithInput(game, inp, prev);
+    inp.zip = false;
+    for (let i = 0; i < 150; i++) {
+      stepWithInput(game, inp, prev);
+      if (pl.mode === MODE_ZIP) zipTicks++;
+      sample();
+    }
+  }
+  an.diagnostics = false;
+  an.onFootstep = null;
+  const names = ['idle', 'run', 'air', 'swing', 'dive', 'zip', 'wall', 'traverse', 'roll', 'release'];
+  return {
+    ...locomotion,
+    clipFrames: clip.frames,
+    clipOver3cm: clip.over3cm,
+    clipMaxCm: clip.max * 100,
+    clipWorst: clip.joint,
+    clipHist,
+    clipLog: clipLog.join(' | '),
+    wallTicks,
+    zipTicks,
+    nanBones,
+    statesSeen: [...states].sort().map((i) => names[i]).join(','),
   };
 }

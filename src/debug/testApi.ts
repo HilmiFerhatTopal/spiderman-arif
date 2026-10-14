@@ -3,6 +3,7 @@ import { MODE_NAMES } from '../player/player';
 import { tuning } from '../config/tuning';
 import {
   anchorAvailability,
+  characterTest,
   catchTest,
   reattachLatency,
   cityRoute,
@@ -117,6 +118,10 @@ export function installTestApi(game: Game): void {
     cityBot: (maxSeconds = 300) => traversalBot(game, 'city', cityRoute(game), maxSeconds),
     parkBot: (maxSeconds = 200, diag = false) => traversalBot(game, 'park', parkRoute(game), maxSeconds, undefined, diag),
     cityBotDiag: (maxSeconds = 300) => traversalBot(game, 'city', cityRoute(game), maxSeconds, undefined, true),
+    /** Run a traversal bot until `stop` returns true (screenshots of live states). */
+    botUntil: (which: 'city' | 'park', maxSeconds: number, stop: () => boolean) =>
+      traversalBot(game, which, which === 'city' ? cityRoute(game) : parkRoute(game), maxSeconds, undefined, false, stop),
+    characterTest: () => characterTest(game),
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },

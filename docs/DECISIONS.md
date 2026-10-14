@@ -26,3 +26,12 @@ One line each: decision + why.
 - Trees are InstancedMeshes per species per 320 m chunk with a near LOD (blobs) and a far LOD (one silhouette blob) switched at ~300 m; this keeps the widest view under 1.5 M triangles.
 - Outlines fade with the scene fog so fogged distant silhouettes never read as wireframes.
 - Scene colour is rendered to a half-float MRT target (colour + view normal + float depth); the composite pass converts to sRGB, then FXAA (Medium and up).
+- Gait: stance half-length is 85 % of what the leg can reach at the running hip height, stride grows with speed and the duty factor follows from both, so walking has double support and sprinting a flight phase while planted feet never have to slide.
+- Feet lift either in the first part of their gait swing window or when overstretched (sharp turns, starts); only planted feet constrain how far the hips may drop, and the hips never drop below a lunge (0.7 m).
+- Limb collision is a post-blend pass: sphere-cast shoulder to palm and hip to toe cap, push knees/elbows out of surfaces and keep heel, toe and ankle above the support; planted feet are never moved by it.
+- Wall-crawl hands and feet probe the real facade under each limb with a ray, so palms and soles rest on pilasters and cornices instead of an assumed plane.
+- Character test (f) added to the suite: planted-foot slide per frame, extremity penetration (3 cm probe spheres) over locomotion, both traversal bots, a wall climb and zips, and NaN checks on every bone.
+- The hero is hidden when the camera is closer than 0.75 m to its chest, so a wall-pressed camera never shows the inside of the model.
+- Camera arm at high speed is 5.8 m (was 7.0) so the hero stays readable at swing speed while the FOV still widens from 70 to 95 degrees.
+- The animator also runs during manual (test) ticks, so screenshots and the character test see the real pose; it never feeds back into the simulation.
+- Directional shadows use PCF with radius 2.2 (three r18x removed PCFSoftShadowMap) for soft edges at close range.

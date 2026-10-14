@@ -14,17 +14,21 @@ import { shared } from './render/materials';
 import { buildCityVisuals, type CityVisuals } from './world/cityRender';
 import { Sky } from './world/sky';
 import { DayNight } from './world/dayNight';
-import { smoothstep } from './core/math';
+import { clamp, smoothstep } from './core/math';
 import { tuning } from './config/tuning';
 import { FixedLoop } from './core/loop';
 import { Input, emptyTickInput, type TickInput } from './input/input';
 import { CollisionWorld } from './physics/collision';
-import { Player, MODE_NAMES, type PlayerEvent } from './player/player';
+import { Player, MODE_NAMES, MODE_ZIP, type PlayerEvent } from './player/player';
 import { CameraRig } from './camera/cameraRig';
 import { generateCity } from './world/cityGen';
 import { buildCollisionWorld } from './world/cityCollision';
 import type { CityLayout } from './world/types';
 import { DebugPanel } from './debug/debugPanel';
+import { buildCharacter, type CharacterRig } from './character/rig';
+import { CharacterAnimator } from './character/animator';
+import { WebLine, type WebLineState } from './character/webLine';
+import { Particles } from './fx/particles';
 
 export interface GameOptions {
   seed: number;
@@ -67,6 +71,17 @@ export class Game {
   time = 0;
   timeFast = false;
   frameStats = { calls: 0, triangles: 0, frameMs: 0 };
+  hero!: CharacterRig;
+  animator!: CharacterAnimator;
+  web!: WebLine;
+  particles!: Particles;
+  /** Hide the hero (photo mode toggle). */
+  heroHidden = false;
+  /** Animate the hero during manual (test) ticks. */
+  animateManual = true;
+  private readonly webState: WebLineState = { visible: false, progress: 0, from: new Vector3(), to: new Vector3(), slack: 0, tension: 0 };
+  private readonly tmpV = new Vector3();
+  private readonly tmpN = new Vector3();
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
@@ -109,17 +124,23 @@ export class Game {
     await nextFrame();
     this.player = new Player(this.world, this.layout);
     this.rig = new CameraRig(this.world, window.innerWidth / window.innerHeight);
+    this.hero = buildCharacter();
+    this.animator = new CharacterAnimator(this.hero, this.player);
+    this.web = new WebLine();
+    this.particles = new Particles();
     this.visuals = buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.6;
+    this.sun.shadow.radius = 2.2;
     this.scene.add(this.sun, this.sun.target);
     this.hemi = new HemisphereLight(0xc4e0ff, 0x8a7a66, 0.85);
     this.scene.add(this.hemi);
@@ -181,6 +202,7 @@ export class Game {
     this.simulate(dt);
     this.renderPos.copy(this.player.pos);
     this.updateCamera(dt);
+    if (this.animateManual) this.updateHero(dt);
   }
 
   snapCamera(): void {
@@ -212,8 +234,77 @@ export class Game {
       this.eventLog.push(e);
       if (e.type === 'land' && e.impact > tuning.ground.hardLandingSpeed) this.rig.shake(e.impact);
       if (e.type === 'respawn' || e.type === 'recover') this.prevPos.copy(this.player.pos);
+      this.animator.onEvent(e);
+      this.fxEvent(e);
     }
     if (this.eventLog.length > 200) this.eventLog.splice(0, this.eventLog.length - 200);
+  }
+
+  /** Visual effects triggered by simulation events. */
+  private fxEvent(e: PlayerEvent): void {
+    const pl = this.player;
+    const night = this.dayNight.night;
+    switch (e.type) {
+      case 'attach':
+        this.web.attach(this.tmpV.set(e.x, e.y, e.z), this.tmpN.set(e.nx, e.ny, e.nz));
+        break;
+      case 'zipStart': {
+        const t = pl.zipTarget;
+        if (t.valid) this.tmpN.set(t.nx, t.ny, t.nz);
+        else this.tmpN.set(pl.zip.nx, 0, pl.zip.nz);
+        this.web.attach(this.tmpV.set(e.x, e.y, e.z), this.tmpN);
+        break;
+      }
+      case 'release':
+        this.web.release();
+        if (e.good) this.particles.releaseBurst(this.tmpV.copy(pl.pos).setY(pl.pos.y + 1.1), pl.vel);
+        break;
+      case 'land':
+        if (e.roll || e.impact > tuning.ground.hardLandingSpeed * 0.6) {
+          this.particles.dust(this.tmpV.copy(pl.pos).setY(pl.pos.y + 0.1), clamp(e.impact / 40, 0.3, 1), night);
+        }
+        break;
+      case 'wallGrab':
+        this.tmpN.set(pl.wall.nx, 0, pl.wall.nz);
+        this.particles.wallDust(this.tmpV.copy(pl.pos).setY(pl.pos.y + 1).addScaledVector(this.tmpN, -0.35), this.tmpN);
+        break;
+      case 'splash':
+        this.particles.splash(this.tmpV.set(e.x, tuning.world.waterLevel, e.z));
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** Hero animation, web line and particles for the current render position. */
+  updateHero(dt: number): void {
+    const pl = this.player;
+    this.animator.update(dt, this.renderPos, this.rig.yaw);
+    const cam = this.rig.camera.position;
+    // Never render the hero when the camera is pressed against it.
+    const d = cam.distanceTo(this.tmpV.set(this.renderPos.x, this.renderPos.y + 1.1, this.renderPos.z));
+    this.hero.mesh.visible = !this.heroHidden && d > 0.75;
+    const st = this.webState;
+    const rope = pl.rope;
+    if (rope.attached || rope.firing) {
+      const a = rope.anchor;
+      st.visible = true;
+      st.progress = rope.attached ? 1 : clamp(rope.fireT / Math.max(1e-3, rope.fireDur), 0, 1);
+      st.from.copy(this.animator.handPos[rope.hand]!);
+      st.to.set(a.x, a.y, a.z);
+      const pivot = this.tmpV.set(this.renderPos.x, this.renderPos.y + tuning.body.ropeOffset, this.renderPos.z);
+      st.slack = rope.attached ? rope.length - pivot.distanceTo(st.to) : 0;
+      st.tension = rope.attached ? rope.tension : 0;
+    } else if (pl.mode === MODE_ZIP) {
+      st.visible = true;
+      st.progress = clamp(pl.zip.time / 0.07, 0, 1);
+      st.from.copy(this.animator.handPos[pl.zip.hand]!);
+      st.to.set(pl.zip.tx, pl.zip.ty, pl.zip.tz);
+      st.slack = 0;
+      st.tension = 1;
+    } else st.visible = false;
+    this.web.update(dt, cam, st, this.dayNight.night);
+    this.particles.update(dt);
   }
 
   fillAim(inp: TickInput): void {
@@ -239,6 +330,7 @@ export class Game {
       off.multiplyScalar(Math.exp(-frameDt / Math.max(0.01, tuning.recovery.blendTime / 3)));
     }
     this.updateCamera(frameDt);
+    this.updateHero(frameDt);
     this.timeFast = this.input.enabled && this.input.keyHeld('KeyY');
     if (this.playing && !this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
     this.renderFrame(frameDt);
