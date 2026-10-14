@@ -113,7 +113,7 @@ export function release(k: Kit, good: boolean): void {
 
 /** Rising zip (~0.4 s): noise through a rising band with an accelerating ratchet AM, plus a gliding tone. */
 export function zipStart(k: Kit): void {
-  const v = k.voice(0.6 * vary(0.08), 0, 0.05);
+  const v = k.voice(0.6 * vary(0.08), null, 0.05);
   if (!v) return;
   const t = v.t0;
   const d = 0.4 * vary(0.05);
@@ -150,7 +150,7 @@ export function zipStart(k: Kit): void {
 
 /** Zip arrival: a short thunk with a falling swish. */
 export function zipEnd(k: Kit): void {
-  const v = k.voice(0.34 * vary(0.08), 0, 0.08);
+  const v = k.voice(0.34 * vary(0.08), null, 0.08);
   if (!v) return;
   const t = v.t0;
   tone(v, t, 'sine', 175, 62, 0.09, 0.6, 0.003, 0.16);
@@ -304,7 +304,7 @@ export function land(k: Kit, impact: number, surface: number): void {
 
 /** Landing roll: a two-hump cloth/body scuff with soft thumps and a little grit. */
 export function roll(k: Kit): void {
-  const v = k.voice(0.42 * vary(0.1), 0, 0.03);
+  const v = k.voice(0.42 * vary(0.1), null, 0.03);
   if (!v) return;
   const t = v.t0;
   const n = v.noise(k.bank.white, t, t + 0.55);
@@ -374,7 +374,7 @@ export function wallGrab(k: Kit, surface: number): void {
 
 /** Jump: a short push-off thump and a rising cloth swish. */
 export function jump(k: Kit): void {
-  const v = k.voice(0.4 * vary(0.1), 0, 0.02);
+  const v = k.voice(0.4 * vary(0.1), null, 0.02);
   if (!v) return;
   const t = v.t0;
   tone(v, t, 'sine', 125, 78, 0.06, 0.4, 0.003, 0.07);
@@ -390,7 +390,7 @@ export function jump(k: Kit): void {
 
 /** Air boost: a short powerful stereo whoosh (band sweeping up then down), a sub punch and an air crack. */
 export function boost(k: Kit): void {
-  const v = k.voice(0.62 * vary(0.06), 0, 0.12);
+  const v = k.voice(0.62 * vary(0.06), null, 0.12);
   if (!v) return;
   const t = v.t0;
   const n = v.noise(k.bank.pink, t, t + 0.72);
@@ -409,7 +409,7 @@ export function boost(k: Kit): void {
 
 /** Dive start: a rushing air swell with a fluttering lowpass and a low rush underneath. */
 export function dive(k: Kit): void {
-  const v = k.voice(0.5 * vary(0.06), 0, 0.06);
+  const v = k.voice(0.5 * vary(0.06), null, 0.06);
   if (!v) return;
   const t = v.t0;
   const d = 1.1;
@@ -439,7 +439,7 @@ export function dive(k: Kit): void {
 
 /** Vault: a hand-plant slap followed by a body swish. */
 export function vault(k: Kit): void {
-  const v = k.voice(0.54 * vary(0.1), 0, 0.03);
+  const v = k.voice(0.54 * vary(0.1), null, 0.03);
   if (!v) return;
   const t = v.t0;
   burst(v, k.bank.white, t, 'bandpass', 1500, 1.2, 0.45, 0.0008, 0.03);
@@ -457,7 +457,7 @@ export function vault(k: Kit): void {
 
 /** Water splash: an impact burst, a low plunge, falling spray and scattered panned droplets. */
 export function splash(k: Kit): void {
-  const v = k.voice(0.62 * vary(0.06), 0, 0.12);
+  const v = k.voice(0.62 * vary(0.06), null, 0.12);
   if (!v) return;
   splashBig(k, v, v.t0, 1);
 }
@@ -495,7 +495,7 @@ export function ringPass(k: Kit, index: number): void {
   const idx = clamp(Math.floor(num(index, 0)), 0, 12);
   const semi = PENTATONIC[idx % 5] + 12 * Math.floor(idx / 5);
   const f = 523.25 * semis(semi);
-  const v = k.voice(0.42, 0, 0.18);
+  const v = k.voice(0.42, null, 0.18);
   if (!v) return;
   const t = v.t0;
   bell(v, t, f, 0.5 * earComp(f), 0.8);
@@ -506,7 +506,7 @@ export function ringPass(k: Kit, index: number): void {
 
 /** Route complete: a quick C-E-G-C arpeggio into a bright sawtooth chord swell with vibrato and sparkles. */
 export function ringComplete(k: Kit): void {
-  const v = k.voice(0.75, 0, 0.2);
+  const v = k.voice(0.75, null, 0.2);
   if (!v) return;
   const t = v.t0;
   const base = 523.25;
@@ -556,7 +556,7 @@ export function ringComplete(k: Kit): void {
 
 /** Menu click: a short falling sine blip with a bright tick. */
 export function uiClick(k: Kit): void {
-  const v = k.voice(0.26 * vary(0.05), 0, 0, PRI_UI);
+  const v = k.voice(0.26 * vary(0.05), null, 0, PRI_UI);
   if (!v) return;
   const t = v.t0;
   tone(v, t, 'sine', 1750, 1150, 0.025, 0.5, 0.001, 0.04);
@@ -566,7 +566,7 @@ export function uiClick(k: Kit): void {
 
 /** Menu hover: a very soft, short two-tone tick. */
 export function uiHover(k: Kit): void {
-  const v = k.voice(0.14, 0, 0, PRI_UI);
+  const v = k.voice(0.14, null, 0, PRI_UI);
   if (!v) return;
   const t = v.t0;
   tone(v, t, 'sine', 2400, 2550, 0.015, 0.35, 0.002, 0.03);
@@ -575,7 +575,7 @@ export function uiHover(k: Kit): void {
 
 /** Camera shutter: two curtain clicks ("ka-chick") with a short mechanism whir between them. */
 export function photoShutter(k: Kit): void {
-  const v = k.voice(0.55, 0, 0.05, PRI_UI);
+  const v = k.voice(0.55, null, 0.05, PRI_UI);
   if (!v) return;
   const t = v.t0;
   const W = k.bank.white;

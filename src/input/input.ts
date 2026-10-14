@@ -75,6 +75,8 @@ export class Input {
   /** Gameplay input is ignored while false (menus open). */
   enabled = false;
   private keyListeners: Array<(code: string, e: KeyboardEvent) => void> = [];
+  private settleUntil = 0;
+  private settleEvents = 0;
   private lockListeners: Array<(locked: boolean) => void> = [];
 
   constructor(private readonly element: HTMLElement) {
@@ -216,6 +218,12 @@ export class Input {
 
   private onMouseMove = (e: MouseEvent): void => {
     if (!this.pointerLocked) return;
+    // Browsers can report the jump from the cursor position to the lock
+    // centre as movement right after locking: ignore that settle window.
+    if (performance.now() < this.settleUntil || this.settleEvents > 0) {
+      this.settleEvents--;
+      return;
+    }
     // Guard against the occasional huge spike some browsers emit on lock.
     const dx = Math.abs(e.movementX) > 600 ? 0 : e.movementX;
     const dy = Math.abs(e.movementY) > 600 ? 0 : e.movementY;
@@ -232,6 +240,8 @@ export class Input {
 
   private onLockChange = (): void => {
     this.pointerLocked = document.pointerLockElement === this.element;
+    this.settleUntil = performance.now() + 150;
+    this.settleEvents = 2;
     if (!this.pointerLocked) {
       this.mouseHeld.fill(false);
       this.mouseDX = 0;

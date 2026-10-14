@@ -48,7 +48,19 @@ function radialTexture(): CanvasTexture {
 }
 
 /** Build every static visual of the city from the layout. */
-export function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void): CityVisuals {
+/** Yield to the browser so the loading screen can paint between build steps. */
+function yieldTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+export async function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void): Promise<CityVisuals> {
+  let lastYield = performance.now();
+  const step = async (f: number): Promise<void> => {
+    if (performance.now() - lastYield < 30) return;
+    onProgress?.(f);
+    await yieldTask();
+    lastYield = performance.now();
+  };
   const group = new Group();
   group.name = 'city';
   shared.uWinAtlas.value = makeWindowAtlas();
@@ -69,11 +81,12 @@ export function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void
     }
     return c;
   };
-  L.buildings.forEach((b, i) => {
+  for (let i = 0; i < L.buildings.length; i++) {
+    const b = L.buildings[i]!;
     const fp = b.footprint;
     addBuildingGeometry(b, getChunk((fp.minX + fp.maxX) / 2, (fp.minZ + fp.maxZ) / 2), signAtlas.signRect, signAtlas.boardRect);
-    if (onProgress && i % 100 === 0) onProgress((i / L.buildings.length) * 0.6);
-  });
+    await step((i / L.buildings.length) * 0.6);
+  }
   for (const p of L.props) {
     const c = getChunk(p.x, p.z);
     addStreetProp(p, c.props, c.glow);
@@ -150,8 +163,10 @@ export function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void
       triangles += b.triangleCount;
     };
     add(c.facade, matFacade, true);
+    await step(0.6 + (meshes / Math.max(1, chunks.size)) * 0.1);
   }
   onProgress?.(0.7);
+  await step(0.7);
 
   // --- Ground ---
   const gnd = buildGround(L);
@@ -173,6 +188,7 @@ export function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void
     triangles += gnd.ground.triangleCount + gnd.decals.triangleCount;
   }
   onProgress?.(0.8);
+  await step(0.8);
 
   // --- Water: big plane + pond ---
   const landV = new Vector4(L.land.minX, L.land.minZ, L.land.maxX, L.land.maxZ);
@@ -198,6 +214,7 @@ export function buildCityVisuals(L: CityLayout, onProgress?: (f: number) => void
   group.add(trees.group);
   meshes += trees.group.children.length;
   onProgress?.(0.9);
+  await step(0.9);
 
   // --- Lamp light pools (night) ---
   const lamps = L.props.filter((p) => p.type === SP_LAMP || p.type === SP_PARK_LAMP);

@@ -1,4 +1,5 @@
 import type { Game } from '../game';
+import type { App } from '../app';
 import { MODE_NAMES } from '../player/player';
 import { tuning } from '../config/tuning';
 import {
@@ -23,16 +24,29 @@ declare global {
 }
 
 /** Deterministic test API, installed in dev builds only. */
-export function installTestApi(game: Game): void {
+export function installTestApi(game: Game, app?: App): void {
   const held: BotInput = emptyBotInput();
   const prev: BotInput = emptyBotInput();
   const api = {
     ready: true,
     game,
     tuning,
+    app,
     setManual(on: boolean): void {
       game.loop.manual = on;
       game.playing = true;
+      game.view = 'play';
+      // Deterministic stepping: the UI overlay is hidden unless a test shows it.
+      api.showUi(false);
+    },
+    /** Run the app's per-frame UI/audio update once (manual mode has no frame hook). */
+    uiFrame(dt = 1 / 60): void {
+      (app as unknown as { frame(dt: number): void } | undefined)?.frame(dt);
+    },
+    /** Show or hide the DOM UI (menus, HUD) over the canvas for screenshots. */
+    showUi(on: boolean): void {
+      const root = document.getElementById('ui');
+      if (root) root.style.display = on ? '' : 'none';
     },
     setInput(partial: Partial<BotInput>): void {
       Object.assign(held, partial);

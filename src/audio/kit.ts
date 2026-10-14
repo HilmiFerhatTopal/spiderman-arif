@@ -81,10 +81,18 @@ export class Kit {
 
   /**
    * Starts a one-shot voice at `level` routed to `dest` (the SFX bus by
-   * default), panned by `pan` and sending `reverb` to the shared reverb.
-   * Returns null when the voice cap refuses it.
+   * default) and sending `reverb` to the shared reverb. `pan` null plays the
+   * voice unpanned (centred, full level on both channels); a number (0
+   * included) places it with an equal-power panner. Returns null when the
+   * voice cap refuses it.
    */
-  voice(level: number, pan = 0, reverb = 0, priority: number = PRI_SFX, dest: AudioNode = this.out): Voice | null {
+  voice(
+    level: number,
+    pan: number | null = null,
+    reverb = 0,
+    priority: number = PRI_SFX,
+    dest: AudioNode = this.out,
+  ): Voice | null {
     return this.voices.create(dest, level, pan, priority, this.reverb, reverb);
   }
 }

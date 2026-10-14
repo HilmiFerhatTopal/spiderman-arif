@@ -35,3 +35,12 @@ One line each: decision + why.
 - Camera arm at high speed is 5.8 m (was 7.0) so the hero stays readable at swing speed while the FOV still widens from 70 to 95 degrees.
 - The animator also runs during manual (test) ticks, so screenshots and the character test see the real pose; it never feeds back into the simulation.
 - Directional shadows use PCF with radius 2.2 (three r18x removed PCFSoftShadowMap) for soft edges at close range.
+- An `App` shell (src/app.ts) owns UI, audio and game and runs loading -> menu -> playing <-> paused/photo; the game itself stays a composition root with no DOM menus.
+- Play only advances while the pointer is locked; a refused lock shows "click to resume" instead of running with a dead mouse, and losing the lock (Esc, alt-tab, hidden tab) pauses.
+- Mouse movement in the first 150 ms / two events after a pointer-lock change is ignored: browsers report the cursor-to-centre jump as movement, which otherwise flicks the camera on Play.
+- Photo mode: P toggles; the free camera flies with WASD, Space/C, Shift and looks with the mouse while the canvas holds the lock (click to lock, Esc to free the cursor for the panel); it is kept out of solid geometry; time, animation and particles freeze; the hero stays in the shot.
+- PNG export renders a fresh frame and calls canvas.toBlob in the same task (no preserveDrawingBuffer cost during play); file name skythread-YYYYMMDD-HHMMSS.png.
+- The main menu background is a slow orbit over the central park with the live day-night cycle; speed lines are disabled outside the gameplay view.
+- The city visual build yields to the browser every ~30 ms so the loading bar and stage label animate instead of freezing for the whole build.
+- HUD altitude is height above street level; the audio wind/altitude layer uses height above the surface directly below.
+- Test g covers the shell end to end: settings through the real settings screen into the game and localStorage, reload, defaults, corrupt storage, audio unlock and music decode with an analyser on the master bus, M mute, pause on lock loss, resume, photo PNG download.

@@ -17,7 +17,7 @@ import { Ambience, type AmbienceInput } from './ambience';
 import { clamp, clamp01, follow, impulseJob, num } from './dsp';
 import { Bank, Kit } from './kit';
 import { MusicLoop } from './music';
-import * as sfx from './sfx';
+import * as fx from './sfx';
 
 export interface AudioListenerState {
   /** Player speed m/s (0..90). */
@@ -185,11 +185,11 @@ export class AudioEngine {
   }
 
   /** Each value 0..1; changes ramp smoothly. */
-  setVolumes(master: number, music: number, sfxVolume: number): void {
+  setVolumes(master: number, music: number, sfx: number): void {
     try {
       this.masterVol = clamp01(num(master, this.masterVol));
       this.musicVol = clamp01(num(music, this.musicVol));
-      this.sfxVol = clamp01(num(sfxVolume, this.sfxVol));
+      this.sfxVol = clamp01(num(sfx, this.sfxVol));
       const g = this.graph;
       if (!g) return;
       this.ramp(g.master.gain, this.masterGain(), 0.05);
@@ -248,85 +248,85 @@ export class AudioEngine {
 
   /** pan -1 left hand .. +1 right hand. */
   webShot(pan: number): void {
-    this.play((k) => sfx.webShot(k, pan));
+    this.play((k) => fx.webShot(k, pan));
   }
 
   /** strength 0..1. */
   attach(strength: number): void {
-    this.play((k) => sfx.attach(k, strength));
+    this.play((k) => fx.attach(k, strength));
   }
 
   release(good: boolean): void {
-    this.play((k) => sfx.release(k, !!good));
+    this.play((k) => fx.release(k, !!good));
   }
 
   zipStart(): void {
-    this.play((k) => sfx.zipStart(k));
+    this.play((k) => fx.zipStart(k));
   }
 
   zipEnd(): void {
-    this.play((k) => sfx.zipEnd(k));
+    this.play((k) => fx.zipEnd(k));
   }
 
   /** Surface ids as in src/physics/collision.ts; intensity 0 walk .. 1 sprint. */
   footstep(surface: number, intensity: number): void {
-    this.play((k) => sfx.footstep(k, surface, intensity));
+    this.play((k) => fx.footstep(k, surface, intensity));
   }
 
   /** impact m/s 0..80. */
   land(impact: number, surface: number): void {
-    this.play((k) => sfx.land(k, impact, surface));
+    this.play((k) => fx.land(k, impact, surface));
   }
 
   roll(): void {
-    this.play((k) => sfx.roll(k));
+    this.play((k) => fx.roll(k));
   }
 
   wallGrab(surface: number): void {
-    this.play((k) => sfx.wallGrab(k, surface));
+    this.play((k) => fx.wallGrab(k, surface));
   }
 
   jump(): void {
-    this.play((k) => sfx.jump(k));
+    this.play((k) => fx.jump(k));
   }
 
   boost(): void {
-    this.play((k) => sfx.boost(k));
+    this.play((k) => fx.boost(k));
   }
 
   dive(): void {
-    this.play((k) => sfx.dive(k));
+    this.play((k) => fx.dive(k));
   }
 
   vault(): void {
-    this.play((k) => sfx.vault(k));
+    this.play((k) => fx.vault(k));
   }
 
   splash(): void {
-    this.play((k) => sfx.splash(k));
+    this.play((k) => fx.splash(k));
   }
 
   ringPass(index: number): void {
-    this.play((k) => sfx.ringPass(k, index));
+    this.play((k) => fx.ringPass(k, index));
   }
 
   ringComplete(): void {
-    this.play((k) => sfx.ringComplete(k));
+    this.play((k) => fx.ringComplete(k));
   }
 
   uiClick(): void {
-    this.play((k) => sfx.uiClick(k));
+    this.play((k) => fx.uiClick(k));
   }
 
   uiHover(): void {
     const t = nowMs();
     if (t - this.hoverAt < HOVER_SPACING_MS) return;
     this.hoverAt = t;
-    this.play((k) => sfx.uiHover(k));
+    this.play((k) => fx.uiHover(k));
   }
 
   photoShutter(): void {
-    this.play((k) => sfx.photoShutter(k));
+    this.play((k) => fx.photoShutter(k));
   }
 
   getDebugInfo(): AudioDebugInfo {

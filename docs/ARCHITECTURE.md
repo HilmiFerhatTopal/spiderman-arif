@@ -27,11 +27,13 @@ This document is the plan the code follows. It is written before the code and ke
 | `audio/` | Music loader with crossfaded seamless loop, buses (master/music/sfx), synthesized SFX and ambience. |
 | `ui/` | DOM screens (loading, main menu, controls, settings, pause), HUD (crosshair state, speed, altitude, ring timer, cues), rotating minimap, photo mode panel, settings persistence. |
 | `life/` | Instanced traffic with intersection logic, instanced pedestrians. Visual only, never collide with the player. |
-| `extras/` | Ring races (3 routes), photo mode controller. |
+| `extras/` | Ring races (3 routes, timer, best times, minimap markers). |
 | `debug/` | lil-gui panel (backtick), `window.__game` test API (dev builds only), in-page test drivers (fuzz, anchor availability, traversal bots, soak). |
-| `game.ts` | Composition root. Owns the loop, wires simulation, rendering, audio and UI. |
+| `game.ts` | Composition root for the 3D game: loop, simulation, camera views (gameplay rig, menu orbit, photo free camera), hero, effects, rendering. |
+| `app.ts` | Application shell: owns UI, audio and the game; screen flow loading → main menu → playing ↔ paused / photo mode; pointer-lock gating; settings application; HUD, minimap and audio listener updates; maps simulation events to sounds. |
+| `main.ts` | Boot: WebGL2 check, seed from the URL, creates the App, installs the test API in dev builds. |
 
-Dependency direction: `config`, `core` ← `physics` ← `world` (generation produces colliders) ← `player` ← `camera` ← `character`/`render`/`audio`/`ui` ← `game`. The simulation (`physics`, `player`, world generation data) never imports rendering code, so it can be stepped headless at full speed by the test drivers.
+Dependency direction: `config`, `core` ← `physics` ← `world` (generation produces colliders) ← `player` ← `camera` ← `character`/`render`/`fx`/`life`/`extras` ← `game` ← `app` (with `audio` and `ui`). The simulation (`physics`, `player`, world generation data) never imports rendering code, so it can be stepped headless at full speed by the test drivers.
 
 ## 3. Fixed-timestep loop
 
@@ -101,14 +103,14 @@ Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinemati
 - Cel shading: `MeshToonMaterial` with a 3-band gradient map, patched via `onBeforeCompile` for facade windows (shared window atlas texture plus per-window lit hash), wind sway (trees), and an extra MRT output with view-space normals.
 - Outlines: post-process edge detection on the depth buffer (Laplacian of inverse depth, which is zero on planes so flat surfaces never produce false edges) and the normal buffer (creases), with distance fade to prevent shimmer. Works with instancing at no extra draw calls.
 - Pipeline: shadow map (one directional light, texel-snapped around the player) → MRT scene pass (color, normal, depth) → composite pass (outlines, speed lines, grading) → FXAA → screen. Render scale and dynamic resolution resize the internal targets.
-- Batching: buildings, roads and sidewalks are merged per 192 m chunk (one draw call per chunk each). Trees, props, cars and pedestrians use `InstancedMesh`. Chunks are frustum culled.
+- Batching: facades, roof props, street props, signs and lamp bulbs are merged per 240 m chunk into one draw call (one shared cel material, per-vertex mode selects window/plain/emissive/sign shading); ground is merged likewise. Trees (near/far LOD), cars and pedestrians use `InstancedMesh`. The hero is one rigidly skinned mesh (one draw call). Chunks are frustum culled.
 - Day-night: time drives sun/moon direction, light colors, hemisphere ambient, fog, sky shader, window emission (per-window thresholds so lights come on gradually), street lamp emission and light pools.
 
 ## 8. Performance budget
 
 | Item | Budget | Plan |
 | --- | --- | --- |
-| Draw calls | ≤ 600 | ~150-250 typical (chunks, instancing, 21-part character) |
+| Draw calls | ≤ 600 | ~150-250 typical (chunks, instancing, one-mesh character) |
 | Visible triangles | ≤ 2 M | boxes plus textures for detail, low-poly instanced props |
 | Simulation | ≤ 1 ms per tick | grid queries, analytic primitives, targeting at 60 Hz |
 | Cold load | < 10 s | city generation < 2 s, shaders compiled during loading |
@@ -118,4 +120,7 @@ Dynamic resolution lowers the internal render scale when the frame time exceeds 
 
 ## 9. Testing
 
-`window.__game` (dev builds) exposes: manual stepping, input injection, look control, teleport, state read-back, renderer stats, time of day, screenshots, and in-page drivers for the protocol in `docs/spec/05`: rope test, collision fuzz, anchor availability, traversal bots, soak. Playwright specs in `tests/` call these drivers and assert the thresholds; numbers are written to `test-results/*.json`.
+`window.__game` (dev builds) exposes: manual stepping, input injection, look control, teleport, state read-back, renderer stats, time of day, fixed camera poses for screenshots, UI visibility, and in-page drivers for the protocol in `docs/spec/05`: rope test, collision fuzz, anchor availability, traversal bots, soak, plus the character test (foot sliding, limb clipping) and ring races. Playwright specs in `tests/` call these drivers and assert the thresholds; numbers are written to `test-results/*.json`:
+
+- a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
+- f `character.spec.ts` planted feet and limb clipping, g `ui.spec.ts` settings/audio/pause/photo flow, h `rings.spec.ts` ring race, plus `smoke.spec.ts`.

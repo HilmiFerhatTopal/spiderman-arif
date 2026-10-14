@@ -18,7 +18,7 @@ import { clamp, smoothstep } from './core/math';
 import { tuning } from './config/tuning';
 import { FixedLoop } from './core/loop';
 import { Input, emptyTickInput, type TickInput } from './input/input';
-import { CollisionWorld } from './physics/collision';
+import { CollisionWorld, F_CANOPY } from './physics/collision';
 import { Player, MODE_NAMES, MODE_ZIP, type PlayerEvent } from './player/player';
 import { CameraRig } from './camera/cameraRig';
 import { generateCity } from './world/cityGen';
@@ -67,6 +67,7 @@ export class Game {
   sun!: DirectionalLight;
   hemi!: HemisphereLight;
   quality: QualityPreset = QUALITY[1]!;
+  qualityIndex = 1;
   renderScale = 1;
   time = 0;
   timeFast = false;
@@ -82,6 +83,15 @@ export class Game {
   private readonly webState: WebLineState = { visible: false, progress: 0, from: new Vector3(), to: new Vector3(), slack: 0, tension: 0 };
   private readonly tmpV = new Vector3();
   private readonly tmpN = new Vector3();
+  /** What drives the camera: gameplay rig, slow menu orbit, or the photo-mode free camera. */
+  view: 'play' | 'menu' | 'photo' = 'play';
+  /** Photo-mode free camera. */
+  readonly photoCam = { pos: new Vector3(), yaw: 0, pitch: 0, fov: 70 };
+  /** Called once per rendered frame (real-time loop only) after the frame is drawn. */
+  onFrame: ((dt: number) => void) | null = null;
+  /** Called for every simulation event (audio, HUD). */
+  onPlayerEvent: ((e: PlayerEvent) => void) | null = null;
+  private menuAngle = 0.6;
   /** Fixed camera pose for screenshots (tests/photo checks). */
   cameraOverride: { x: number; y: number; z: number; tx: number; ty: number; tz: number; fov: number } | null = null;
 
@@ -128,7 +138,7 @@ export class Game {
     this.animator = new CharacterAnimator(this.hero, this.player);
     this.web = new WebLine();
     this.particles = new Particles();
-    this.visuals = buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
+    this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
@@ -236,6 +246,7 @@ export class Game {
       if (e.type === 'respawn' || e.type === 'recover') this.prevPos.copy(this.player.pos);
       this.animator.onEvent(e);
       this.fxEvent(e);
+      this.onPlayerEvent?.(e);
     }
     if (this.eventLog.length > 200) this.eventLog.splice(0, this.eventLog.length - 200);
   }
@@ -321,27 +332,121 @@ export class Game {
       return;
     }
     const m = this.input.consumeMouse();
-    if (this.playing) this.rig.applyMouse(m.dx, m.dy);
-    this.renderPos.lerpVectors(this.prevPos, this.player.pos, alpha);
-    // Blend out recovery offsets smoothly.
-    const off = this.player.renderOffset;
-    if (off.lengthSq() > 1e-8) {
-      this.renderPos.add(off);
-      off.multiplyScalar(Math.exp(-frameDt / Math.max(0.01, tuning.recovery.blendTime / 3)));
+    let dt = frameDt;
+    if (this.view === 'menu') {
+      this.updateMenuCamera(frameDt);
+      if (!this.dayNight.paused) this.dayNight.advance(frameDt, 1);
+    } else if (this.view === 'photo') {
+      this.updatePhotoCamera(frameDt, m.dx, m.dy);
+      // Photo mode freezes time: no animation, particles or water motion.
+      dt = 0;
+    } else if (this.playing) {
+      this.rig.applyMouse(m.dx, m.dy);
+      this.renderPos.lerpVectors(this.prevPos, this.player.pos, alpha);
+      // Blend out recovery offsets smoothly.
+      const off = this.player.renderOffset;
+      if (off.lengthSq() > 1e-8) {
+        this.renderPos.add(off);
+        off.multiplyScalar(Math.exp(-frameDt / Math.max(0.01, tuning.recovery.blendTime / 3)));
+      }
+      this.updateCamera(frameDt);
+      this.updateHero(frameDt);
+      this.timeFast = this.input.enabled && this.input.keyHeld('KeyY');
+      if (!this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
+    } else {
+      // Paused under a menu: the frame holds still.
+      dt = 0;
     }
-    this.updateCamera(frameDt);
-    this.updateHero(frameDt);
-    this.timeFast = this.input.enabled && this.input.keyHeld('KeyY');
-    if (this.playing && !this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
-    this.renderFrame(frameDt);
+    this.renderFrame(dt);
     this.post.updateDynamic(this.loop.lastFrameMs);
     if (this.hudEl) {
-      const pl = this.player;
-      this.hudEl.textContent =
-        `mode ${MODE_NAMES[pl.mode]}  speed ${pl.speed.toFixed(1)} m/s  alt ${pl.pos.y.toFixed(1)} m  ${this.dayNight.hour.toFixed(2)} h\n` +
-        `anchor ${pl.swingTarget.valid ? (pl.swingTarget.assisted ? 'assist' : 'aim') : '-'}  zip ${pl.zipTarget.valid ? 'ok' : '-'}  ` +
-        `calls ${this.frameStats.calls}  tris ${this.frameStats.triangles}  scale ${this.post.dynScale.toFixed(2)}`;
+      this.hudEl.style.display = this.debug.visible ? '' : 'none';
+      if (this.debug.visible) {
+        const pl = this.player;
+        this.hudEl.textContent =
+          `mode ${MODE_NAMES[pl.mode]}  speed ${pl.speed.toFixed(1)} m/s  alt ${pl.pos.y.toFixed(1)} m  ${this.dayNight.hour.toFixed(2)} h\n` +
+          `anchor ${pl.swingTarget.valid ? (pl.swingTarget.assisted ? 'assist' : 'aim') : '-'}  zip ${pl.zipTarget.valid ? 'ok' : '-'}  ` +
+          `calls ${this.frameStats.calls}  tris ${this.frameStats.triangles}  scale ${this.post.dynScale.toFixed(2)}`;
+      }
     }
+    this.onFrame?.(frameDt);
+  }
+
+  /** Slow orbit over the park and the towers behind the main menu. */
+  private updateMenuCamera(dt: number): void {
+    this.menuAngle += dt * 0.022;
+    const P = this.layout.park;
+    const cx = (P.minX + P.maxX) / 2,
+      cz = (P.minZ + P.maxZ) / 2;
+    const cam = this.rig.camera;
+    cam.position.set(cx + Math.sin(this.menuAngle) * 560, 190, cz + Math.cos(this.menuAngle) * 560);
+    cam.fov = 55;
+    cam.lookAt(cx, 30, cz);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+  }
+
+  /** Enter photo mode: the free camera starts at the current view. */
+  beginPhoto(): void {
+    const cam = this.rig.camera;
+    const pc = this.photoCam;
+    pc.pos.copy(cam.position);
+    pc.yaw = this.rig.yaw;
+    pc.pitch = this.rig.pitch;
+    pc.fov = cam.fov;
+    this.view = 'photo';
+  }
+
+  /** WASD + mouse free camera (Space/C up and down, Shift fast), kept out of solid geometry. */
+  private updatePhotoCamera(dt: number, mdx: number, mdy: number): void {
+    const pc = this.photoCam;
+    const sens = tuning.camera.baseSensitivity * this.rig.sensitivity;
+    pc.yaw -= mdx * sens;
+    pc.pitch = Math.max(-1.5, Math.min(1.5, pc.pitch - mdy * sens * (this.rig.invertY ? -1 : 1)));
+    const k = this.input;
+    const fx = -Math.sin(pc.yaw) * Math.cos(pc.pitch),
+      fy = Math.sin(pc.pitch),
+      fz = -Math.cos(pc.yaw) * Math.cos(pc.pitch);
+    const rx = Math.cos(pc.yaw),
+      rz = -Math.sin(pc.yaw);
+    const f = (k.keyHeld('KeyW') ? 1 : 0) - (k.keyHeld('KeyS') ? 1 : 0);
+    const r = (k.keyHeld('KeyD') ? 1 : 0) - (k.keyHeld('KeyA') ? 1 : 0);
+    const u = (k.keyHeld('Space') ? 1 : 0) - (k.keyHeld('KeyC') ? 1 : 0);
+    const speed = (k.keyHeld('ShiftLeft') || k.keyHeld('ShiftRight') ? 40 : 10) * Math.min(dt, 0.1);
+    pc.pos.x += (fx * f + rx * r) * speed;
+    pc.pos.y += (fy * f + u) * speed;
+    pc.pos.z += (fz * f + rz * r) * speed;
+    this.world.resolveSphere(pc.pos, 0.35, F_CANOPY, 4);
+    const P = this.layout.bounds;
+    pc.pos.x = Math.max(P.minX - 400, Math.min(P.maxX + 400, pc.pos.x));
+    pc.pos.z = Math.max(P.minZ - 400, Math.min(P.maxZ + 400, pc.pos.z));
+    pc.pos.y = Math.max(tuning.world.waterLevel + 0.5, Math.min(900, pc.pos.y));
+    const cam = this.rig.camera;
+    cam.position.copy(pc.pos);
+    cam.fov = pc.fov;
+    cam.lookAt(pc.pos.x + fx, pc.pos.y + fy, pc.pos.z + fz);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+  }
+
+  /** Render the current view and save it as a PNG download. */
+  savePhoto(): void {
+    this.renderFrame(0);
+    const canvas = this.renderer.domElement;
+    const d = new Date();
+    const pad = (n: number): string => String(n).padStart(2, '0');
+    const name = `skythread-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.png`;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }, 'image/png');
   }
 
   /** Render one frame through the post pipeline and record renderer stats. */
@@ -356,15 +461,18 @@ export class Game {
     if (this.quality.shadows) {
       // Shadows follow the player; with a fixed camera pose they follow the view.
       const o = this.cameraOverride;
+      const cam = this.rig.camera;
       if (o) {
-        const cam = this.rig.camera;
         this.shadowFocus.set(o.tx - o.x, o.ty - o.y, o.tz - o.z).normalize().multiplyScalar(this.quality.shadowExtent * 0.8).add(cam.position);
         this.shadowFocus.y = Math.min(this.shadowFocus.y, o.ty);
+      } else if (this.view !== 'play') {
+        // Free and menu cameras: shadows cover the area in front of the lens.
+        cam.getWorldDirection(this.shadowFocus).multiplyScalar(this.quality.shadowExtent * 0.7).add(cam.position);
       } else this.shadowFocus.copy(this.renderPos);
       this.dayNight.placeShadow(this.sun, this.shadowFocus, this.quality.shadowExtent, this.quality.shadowMap);
     }
     const sp = this.player.speed;
-    this.post.speedLines = smoothstep(32, 60, sp) * (this.player.mode === 0 ? 0 : 1);
+    this.post.speedLines = this.view === 'play' ? smoothstep(32, 60, sp) * (this.player.mode === 0 ? 0 : 1) : 0;
     this.renderer.info.reset();
     this.post.render(this.scene, this.rig.camera, this.time);
     this.frameStats.calls = this.renderer.info.render.calls;
@@ -372,7 +480,8 @@ export class Game {
   }
 
   applyQuality(index: number): void {
-    const q = QUALITY[Math.max(0, Math.min(3, index))]!;
+    this.qualityIndex = Math.max(0, Math.min(3, Math.round(index)));
+    const q = QUALITY[this.qualityIndex]!;
     this.quality = q;
     this.sun.castShadow = q.shadows;
     this.renderer.shadowMap.enabled = q.shadows;
@@ -392,7 +501,6 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'Backquote') this.debug.toggle();
     if (!this.playing) return;
-    if (code === 'KeyT') this.dayNight.paused = !this.dayNight.paused;
     if (code === 'Digit1') this.dayNight.setHour(6.4);
     if (code === 'Digit2') this.dayNight.setHour(12);
     if (code === 'Digit3') this.dayNight.setHour(18.6);

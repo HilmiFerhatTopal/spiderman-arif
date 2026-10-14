@@ -218,14 +218,14 @@ export class VoiceManager {
   }
 
   /**
-   * Starts a voice routed to `dest` (through a panner when `pan` is not 0, and
-   * with an optional reverb send). Returns null when the cap is full of more
-   * important voices.
+   * Starts a voice routed to `dest` (through an equal-power panner unless `pan`
+   * is null, and with an optional reverb send). Returns null when the cap is
+   * full of more important voices.
    */
   create(
     dest: AudioNode,
     level: number,
-    pan: number,
+    pan: number | null,
     priority: number,
     send: AudioNode | null,
     sendLevel: number,
@@ -236,7 +236,7 @@ export class VoiceManager {
     const v = new Voice(this.ctx, level, priority, (x) => this.remove(x));
     this.list.push(v);
     let tail: AudioNode = v.out;
-    if (pan !== 0) {
+    if (pan !== null) {
       const p = v.pan(pan);
       if (p) {
         v.out.connect(p);
