@@ -1,0 +1,196 @@
+/** Plain-data description of the generated city. Rendering and physics are built from it. */
+
+export interface Rect {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+}
+
+export interface Road {
+  center: number;
+  width: number;
+  /** Waterfront drive around the island edge. */
+  perimeter: boolean;
+}
+
+export const D_LOW = 0;
+export const D_MID = 1;
+export const D_DOWNTOWN = 2;
+export const D_WATERFRONT = 3;
+export type District = 0 | 1 | 2 | 3;
+
+export interface Block extends Rect {
+  id: number;
+  district: District;
+  /** 0 = plain, 1 = has plaza. */
+  hasPlaza: boolean;
+}
+
+export interface Volume {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+  /** 0 base/podium, 1 body, 2 crown */
+  role: 0 | 1 | 2;
+}
+
+export interface BoxSpec {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+}
+
+export interface FacadeStyle {
+  /** Index into the window atlas (0..7). */
+  window: number;
+  floorHeight: number;
+  bayWidth: number;
+  /** Base wall colour (linear RGB 0-1). */
+  wall: [number, number, number];
+  /** Trim colour for cornices and pilasters. */
+  trim: [number, number, number];
+  /** Glass tint. */
+  glass: [number, number, number];
+  /** Storefront band height (0 = none). */
+  storefront: number;
+  /** Chance a window is lit at night. */
+  litRatio: number;
+  pilasters: boolean;
+}
+
+export const PROP_HVAC = 0;
+export const PROP_TANK = 1;
+export const PROP_ANTENNA = 2;
+export const PROP_HELIPAD = 3;
+export const PROP_BILLBOARD = 4;
+export const PROP_BLADE_SIGN = 5;
+export const PROP_WALL_SIGN = 6;
+export const PROP_SPIRE_TOP = 7;
+
+export interface RoofProp {
+  type: number;
+  x: number;
+  y: number;
+  z: number;
+  /** Size: width (x), height (y), depth (z), or radius for round props. */
+  sx: number;
+  sy: number;
+  sz: number;
+  /** Facing for signs: 0 +X, 1 -X, 2 +Z, 3 -Z. */
+  face: number;
+  /** Sign text index / colour variant. */
+  variant: number;
+}
+
+export interface Building {
+  id: number;
+  district: District;
+  volumes: Volume[];
+  parapets: BoxSpec[];
+  props: RoofProp[];
+  style: FacadeStyle;
+  height: number;
+  /** Footprint of the ground volume. */
+  footprint: Rect;
+  seed: number;
+}
+
+export const TREE_OAK = 0;
+export const TREE_PINE = 1;
+export const TREE_POPLAR = 2;
+export const TREE_MAPLE = 3;
+
+export interface Tree {
+  species: number;
+  x: number;
+  z: number;
+  /** Ground height at the trunk base. */
+  y: number;
+  height: number;
+  trunkRadius: number;
+  /** Trunk collider top. */
+  trunkTop: number;
+  /** Canopy collision ellipsoid. */
+  cy: number;
+  rx: number;
+  ry: number;
+  /** Visual scale factor and rotation. */
+  scale: number;
+  rot: number;
+  park: boolean;
+}
+
+export const SP_LAMP = 0;
+export const SP_HYDRANT = 1;
+export const SP_BENCH = 2;
+export const SP_CAR = 3;
+export const SP_TRAFFIC_LIGHT = 4;
+export const SP_PARK_LAMP = 5;
+export const SP_FOUNTAIN = 6;
+export const SP_BOLLARD = 7;
+export const SP_TRASH = 8;
+
+export interface StreetProp {
+  type: number;
+  x: number;
+  y: number;
+  z: number;
+  /** Rotation around Y. */
+  rot: number;
+  variant: number;
+}
+
+export interface Pier extends Rect {
+  top: number;
+}
+
+export interface PathPolyline {
+  points: Array<[number, number]>;
+  width: number;
+}
+
+export interface BridgeSpec {
+  /** Deck extents. */
+  deck: BoxSpec;
+  towers: BoxSpec[];
+  beams: BoxSpec[];
+  anchorages: BoxSpec[];
+  /** Suspender cable positions (x, z, bottom, top). */
+  suspenders: Array<[number, number, number, number]>;
+  /** Main cable curve samples per side: [x, y] with z = ±cableZ. */
+  cable: Array<[number, number]>;
+  cableZ: number;
+}
+
+export interface CityLayout {
+  seed: number;
+  land: Rect;
+  islet: Rect;
+  promenade: number;
+  avenues: Road[];
+  streets: Road[];
+  park: Rect;
+  pond: { cx: number; cz: number; rx: number; rz: number; level: number };
+  paths: PathPolyline[];
+  blocks: Block[];
+  plazas: Rect[];
+  buildings: Building[];
+  trees: Tree[];
+  props: StreetProp[];
+  parkWalls: BoxSpec[];
+  railings: BoxSpec[];
+  piers: Pier[];
+  bridge: BridgeSpec;
+  /** World hard bounds for the player. */
+  bounds: Rect;
+  /** Spawn point on a sidewalk. */
+  spawn: [number, number, number];
+  stats: { buildings: number; parkTrees: number; streetTrees: number; maxHeight: number };
+}

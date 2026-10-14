@@ -1,0 +1,121 @@
+# SKYTHREAD Architecture
+
+This document is the plan the code follows. It is written before the code and kept in sync with it.
+
+## 1. Stack
+
+- TypeScript (strict), Vite, three.js 0.186.1 (pinned), lil-gui (debug panel), Playwright 1.56.1 (tests, uses the preinstalled Chromium).
+- No physics engine. A custom kinematic character controller runs against an analytic static collision world (boxes, vertical cylinders, ellipsoids, a terrain height function and water).
+- Everything is generated at load time from a seed: geometry, textures (canvas 2D), sounds (WebAudio synthesis). The only file asset is `public/audio/theme.mp3`, fetched from the same origin.
+
+## 2. Module map (`src/`)
+
+| Folder | Responsibility |
+| --- | --- |
+| `config/tuning.ts` | Every gameplay constant (movement, swing, zip, wall, camera, assist, recovery) with UI metadata (min/max/step) for the debug panel. Single source of truth. |
+| `config/quality.ts` | Render quality presets (Low/Medium/High/Ultra): shadow size, densities, view distance, post effects. |
+| `i18n/tr.ts` | All in-game UI text (Turkish). |
+| `core/` | Fixed-timestep loop, seeded RNG, math helpers (critically damped springs, easing), event bus. |
+| `input/` | Keyboard and mouse state, pointer lock, per-tick edge detection, mouse wheel. |
+| `physics/` | Collider storage (struct-of-arrays), uniform spatial grid, capsule resolution, raycast, sphere cast, point tests, terrain and water queries. |
+| `player/` | Player simulation: state machine (ground, air, swing, zip, wall, traverse), rope constraint, anchor targeting with assist, stuck detection and recovery, world-edge handling. Pure simulation, no rendering. |
+| `camera/` | Spring-arm third-person camera with collision, FOV by speed, look-ahead, landing shake. |
+| `world/` | City layout generator (grid, districts, park, waterfront, bridge), building generator (base/body/crown, setbacks, trims, rooftop props, signage), trees, street dressing, geometry builder, chunked render meshes, sky, day-night, water. |
+| `render/` | Renderer setup, cel materials (MeshToonMaterial patched through `onBeforeCompile`), post pipeline (MRT color+normal+depth, outline composite, speed lines, FXAA), dynamic resolution. |
+| `character/` | Procedural 21-joint humanoid built from rounded primitives, procedural animation (gait with planted-foot IK, swing, dive, zip, wall crawl, mantle, roll), web line and impact splat. |
+| `fx/` | Particles and one-shot effects (dust, splash, release burst, landing ring). |
+| `audio/` | Music loader with crossfaded seamless loop, buses (master/music/sfx), synthesized SFX and ambience. |
+| `ui/` | DOM screens (loading, main menu, controls, settings, pause), HUD (crosshair state, speed, altitude, ring timer, cues), rotating minimap, photo mode panel, settings persistence. |
+| `life/` | Instanced traffic with intersection logic, instanced pedestrians. Visual only, never collide with the player. |
+| `extras/` | Ring races (3 routes), photo mode controller. |
+| `debug/` | lil-gui panel (backtick), `window.__game` test API (dev builds only), in-page test drivers (fuzz, anchor availability, traversal bots, soak). |
+| `game.ts` | Composition root. Owns the loop, wires simulation, rendering, audio and UI. |
+
+Dependency direction: `config`, `core` ← `physics` ← `world` (generation produces colliders) ← `player` ← `camera` ← `character`/`render`/`audio`/`ui` ← `game`. The simulation (`physics`, `player`, world generation data) never imports rendering code, so it can be stepped headless at full speed by the test drivers.
+
+## 3. Fixed-timestep loop
+
+- Simulation rate 120 Hz (`dt = 1/120`). `requestAnimationFrame` feeds an accumulator with the clamped frame delta (max 0.1 s). While `acc >= dt`, the previous state is snapshotted and one tick runs. At most 12 ticks per frame; excess time is dropped (slow motion instead of a spiral of death).
+- Rendering interpolates the player transform between the last two ticks with `alpha = acc / dt`. The camera is evaluated per frame from the interpolated position; mouse look is applied per frame (zero added latency) and the yaw/pitch are latched into each tick's input snapshot.
+- Input edges (presses/releases) are queued and consumed by the next tick, so a click shorter than a frame is never lost.
+- Test mode (`__game.setManual(true)`) stops the real-time accumulator; tests call `step(n)` which runs exactly `n` ticks. Same code path, deterministic for a given seed and input script.
+
+## 4. Collision approach
+
+### 4.1 Static world
+
+All static colliders are analytic primitives stored in typed arrays:
+
+- **Box** (axis-aligned): building tiers, parapets, podiums, rooftop HVAC, piers, bridge deck and towers, benches, parked cars, park walls, railings.
+- **Vertical cylinder**: tree trunks, lamp posts, hydrants, antennas, water tanks, bridge pylons.
+- **Ellipsoid** (vertical axis of revolution): tree canopies.
+- **Terrain**: a height function, not geometry. Roads are at y = 0, blocks (sidewalks, plazas, park) at y = 0.15, water surface at y = -1.2 outside the island and in the pond.
+
+Each collider carries flags: `anchorable`, `climbable` (building facades, bridge towers), `cameraBlocks` (false for thin props so the camera does not pop on lamp posts), surface type (concrete, metal, wood, grass, foliage, glass) for footsteps.
+
+Buildings are made only of boxes whose visual surfaces match the collider within 0.3 m (cornices protrude at most 0.25 m, pilasters 0.12 m). Non-box crown shapes are built as stepped boxes so visual and proxy stay identical.
+
+### 4.2 Spatial index
+
+A uniform grid of 16 m cells covers the world. Each cell lists the collider ids overlapping it. Queries:
+
+- `queryAabb` gathers candidates (deduplicated with a stamp counter).
+- `raycast` walks the grid with Amanatides-Woo DDA and tests colliders cell by cell, stopping at the first confirmed hit.
+- `sphereCast` is a raycast against colliders inflated by the radius (used by the camera).
+- `capsuleOverlap` / `pointInside` power the fuzz checks and recovery.
+
+### 4.3 Player capsule resolution
+
+The player is an upright capsule (radius 0.38 m, height 1.8 m). Because it is always vertical, closest points against boxes and vertical cylinders are exact and cheap (XZ clamp plus Y interval overlap). Ellipsoids use a scaled-space radial projection, which is accurate for the near-spherical canopies.
+
+Per tick:
+
+1. Candidates are gathered once for the AABB of the whole tick's sweep, expanded by the radius.
+2. The tick is split into `n = ceil(|v| * dt / 0.15 m)` substeps, so a substep never moves more than 0.15 m. The thinnest collider is 0.24 m and the capsule radius is 0.38 m, so tunnelling is impossible up to any speed (at 100 m/s that is 6 substeps).
+3. Each substep integrates, then runs up to 4 Gauss-Seidel iterations: push out along the contact normal by the penetration depth and remove only the velocity component into the surface (tangential velocity is kept, so glancing contacts never stall).
+4. Terrain is resolved last (`y >= groundHeight`). Contacts are classified (ground if `n.y > 0.65`, wall if `|n.y| < 0.35`, ceiling if `n.y < -0.6`).
+
+Kinematic moves (zip, vault, mantle) go through the same resolver; if a kinematic path is pushed off course or blocked, it aborts into the air state with the current velocity.
+
+### 4.4 Safety nets
+
+- Deep penetration (> 5 cm after resolution) for several ticks, or no progress for 3 s while the player is trying to move or is airborne, triggers recovery: search upward, then a ring search, for the nearest free capsule position with support below. The visual position blends to the new position over 0.35 s (render offset decay) so there is no jolt.
+- Water: feet below the water surface → splash, then respawn at the nearest sidewalk or roof.
+- World edge: beyond the soft boundary a smooth acceleration turns the player back toward the island; the hard clamp is never reached in practice.
+
+## 5. Swing model
+
+- Rope is an inequality constraint on the rope point (feet + 2.0 m): slack when closer than the rope length, taut otherwise. When taut: project the position onto the sphere and remove only outward radial velocity.
+- Arcade layer: reduced gravity while taut, tangential force from input toward the camera direction, gentle heading steering that preserves speed, soft speed cap with drag above 60 m/s, catch conversion (when the rope snaps taut, most of the removed radial speed is redirected tangentially so falling into a swing never stalls), automatic ground clearance (the rope reels in so the arc bottom stays above ground), hands alternate, good-release window on the rising part of the arc with a launch bonus and a visible cue.
+- Attach latency: a fired line reaches the anchor in at most 60 ms; holding LMB with no anchor keeps retrying every tick, so re-attach after release is under 150 ms.
+- Line of sight from the hand to the anchor is checked every tick; when blocked the rope releases gracefully and, if LMB is still held, re-targets.
+
+## 6. Targeting
+
+1. Ray from the camera through the crosshair. A hit within 80 m of the player on an anchorable surface, with clear line of sight from the hand and (for swings) at least 6 m above the player, becomes the anchor.
+2. Otherwise the assist examines anchorable colliders within 70 m: for each it takes the closest surface point to an ideal point placed forward and upward along the aim, scores candidates by aim angle, distance band (20-70 m), height gain and surface type, and line-of-sight checks the best few. Never through geometry.
+3. The result drives the reticle (valid anchor highlighted with a marker at the anchor, invalid dimmed).
+
+## 7. Rendering
+
+- Cel shading: `MeshToonMaterial` with a 3-band gradient map, patched via `onBeforeCompile` for facade windows (shared window atlas texture plus per-window lit hash), wind sway (trees), and an extra MRT output with view-space normals.
+- Outlines: post-process edge detection on the depth buffer (Laplacian of inverse depth, which is zero on planes so flat surfaces never produce false edges) and the normal buffer (creases), with distance fade to prevent shimmer. Works with instancing at no extra draw calls.
+- Pipeline: shadow map (one directional light, texel-snapped around the player) → MRT scene pass (color, normal, depth) → composite pass (outlines, speed lines, grading) → FXAA → screen. Render scale and dynamic resolution resize the internal targets.
+- Batching: buildings, roads and sidewalks are merged per 192 m chunk (one draw call per chunk each). Trees, props, cars and pedestrians use `InstancedMesh`. Chunks are frustum culled.
+- Day-night: time drives sun/moon direction, light colors, hemisphere ambient, fog, sky shader, window emission (per-window thresholds so lights come on gradually), street lamp emission and light pools.
+
+## 8. Performance budget
+
+| Item | Budget | Plan |
+| --- | --- | --- |
+| Draw calls | ≤ 600 | ~150-250 typical (chunks, instancing, 21-part character) |
+| Visible triangles | ≤ 2 M | boxes plus textures for detail, low-poly instanced props |
+| Simulation | ≤ 1 ms per tick | grid queries, analytic primitives, targeting at 60 Hz |
+| Cold load | < 10 s | city generation < 2 s, shaders compiled during loading |
+| Frame hitches | none > 40 ms | no allocation in hot loops, precompiled shaders, no runtime geometry rebuilds |
+
+Dynamic resolution lowers the internal render scale when the frame time exceeds the target and raises it back with hysteresis.
+
+## 9. Testing
+
+`window.__game` (dev builds) exposes: manual stepping, input injection, look control, teleport, state read-back, renderer stats, time of day, screenshots, and in-page drivers for the protocol in `docs/spec/05`: rope test, collision fuzz, anchor availability, traversal bots, soak. Playwright specs in `tests/` call these drivers and assert the thresholds; numbers are written to `test-results/*.json`.

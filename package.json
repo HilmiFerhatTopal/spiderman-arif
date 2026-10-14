@@ -1,0 +1,26 @@
+{
+  "name": "skythread",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "SKYTHREAD - a single-player 3D open-world web-swinging game for desktop browsers.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "playwright test",
+    "test:quick": "playwright test --grep @quick"
+  },
+  "dependencies": {
+    "lil-gui": "0.21.0",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.19.1",
+    "@types/three": "0.186.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  }
+}
