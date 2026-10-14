@@ -45,6 +45,7 @@ export class App {
     diving: false,
     paused: true,
   };
+  private readonly ringHud: NonNullable<HudState['ring']> = { routeName: '', index: 0, total: 0, time: 0, best: null, finished: null };
   private readonly screenPt = { x: 0, y: 0 };
   private readonly proj = new Vector3();
   private fpsAvg = 60;
@@ -88,6 +89,10 @@ export class App {
     ui.onUiSound = (kind) => (kind === 'click' ? audio.uiClick() : audio.uiHover());
     ui.onSettingsChange = (s) => this.applySettings(s);
     game.onPlayerEvent = (e) => this.onEvent(e);
+    game.rings.onEvent = (e) => {
+      if (e.type === 'pass') audio.ringPass(e.index);
+      else if (e.type === 'finish') audio.ringComplete();
+    };
     game.animator.onFootstep = (f) => audio.footstep(f.surface, f.intensity);
     game.input.onLock((locked) => this.onLock(locked));
     // Audio may only start after a user gesture.
@@ -340,6 +345,18 @@ export class App {
       hud.anchorScreen = t.valid ? this.toScreen(t.x, t.y, t.z) : null;
       hud.goodWindow = rope.attached && rope.goodWindow;
       hud.goodFlash = pl.goodReleaseFlash;
+      const rh = game.rings.hud();
+      if (rh) {
+        const r = this.ringHud;
+        r.routeName = tr.routes[game.rings.routeId(rh.route)];
+        r.index = rh.index;
+        r.total = rh.total;
+        r.time = rh.time;
+        r.best = rh.best;
+        r.finished = rh.finished;
+        hud.ring = r;
+      } else hud.ring = null;
+      game.rings.markers(this.minimapRings);
       this.extraHud?.(hud);
       ui.updateMinimap(pl.pos.x, pl.pos.z, game.rig.yaw, this.minimapRings);
     }

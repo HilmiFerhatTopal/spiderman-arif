@@ -29,6 +29,9 @@ import { buildCharacter, type CharacterRig } from './character/rig';
 import { CharacterAnimator } from './character/animator';
 import { WebLine, type WebLineState } from './character/webLine';
 import { Particles } from './fx/particles';
+import { Traffic } from './life/traffic';
+import { Pedestrians } from './life/pedestrians';
+import { RingRaces } from './extras/rings';
 
 export interface GameOptions {
   seed: number;
@@ -76,6 +79,11 @@ export class Game {
   animator!: CharacterAnimator;
   web!: WebLine;
   particles!: Particles;
+  traffic!: Traffic;
+  peds!: Pedestrians;
+  rings!: RingRaces;
+  private readonly chestPrev = new Vector3();
+  private readonly chestNow = new Vector3();
   /** Hide the hero (photo mode toggle). */
   heroHidden = false;
   /** Animate the hero during manual (test) ticks. */
@@ -138,13 +146,16 @@ export class Game {
     this.animator = new CharacterAnimator(this.hero, this.player);
     this.web = new WebLine();
     this.particles = new Particles();
+    this.traffic = new Traffic(this.layout, QUALITY[3]!.trafficCars, this.opts.seed);
+    this.peds = new Pedestrians(this.layout, QUALITY[3]!.pedestrians, this.opts.seed, (x, z) => this.world.terrain.height(x, z));
+    this.rings = new RingRaces(this.layout, this.world);
     this.visuals = await buildCityVisuals(this.layout, (f) => p(0.4 + f * 0.45, 'buildings'));
     await nextFrame();
     p(0.88, 'shaders');
     this.sky = new Sky(this.opts.seed);
     this.scene.add(this.sky.group);
     this.scene.add(this.visuals.group);
-    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh);
+    this.scene.add(this.hero.mesh, this.web.group, this.particles.mesh, this.traffic.mesh, this.peds.mesh, this.rings.mesh);
     this.scene.fog = new Fog(0xb4dbf6, 300, 2000);
     this.sun = new DirectionalLight(0xffffff, 2.4);
     this.sun.castShadow = true;
@@ -172,6 +183,8 @@ export class Game {
     // Compile every shader during loading so play never hitches on first use.
     this.renderer.compile(this.scene, this.rig.camera);
     this.spawn();
+    this.applyLifeDensity();
+    this.updateLife(0);
     p(1, 'done');
     this.makeDebugHud();
     this.resize();
@@ -238,6 +251,9 @@ export class Game {
     const t0 = performance.now();
     this.player.step(dt, this.tickInput);
     this.simTimeMs += performance.now() - t0;
+    this.chestPrev.copy(this.prevPos).y += 1.1;
+    this.chestNow.copy(this.player.pos).y += 1.1;
+    if (!this.player.events.some((e) => e.type === 'respawn' || e.type === 'recover')) this.rings.check(this.chestPrev, this.chestNow, dt);
     this.simTicksMeasured++;
     this.ticks++;
     for (const e of this.player.events) {
@@ -335,6 +351,7 @@ export class Game {
     let dt = frameDt;
     if (this.view === 'menu') {
       this.updateMenuCamera(frameDt);
+      this.updateLife(frameDt);
       if (!this.dayNight.paused) this.dayNight.advance(frameDt, 1);
     } else if (this.view === 'photo') {
       this.updatePhotoCamera(frameDt, m.dx, m.dy);
@@ -351,6 +368,7 @@ export class Game {
       }
       this.updateCamera(frameDt);
       this.updateHero(frameDt);
+      this.updateLife(frameDt);
       this.timeFast = this.input.enabled && this.input.keyHeld('KeyY');
       if (!this.dayNight.paused) this.dayNight.advance(frameDt, this.timeFast ? tuning.time.fastForwardRate : 1);
     } else {
@@ -496,6 +514,25 @@ export class Game {
     this.post.settings.maxDynScale = q.maxDynScale;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatioCap));
     this.resize();
+    this.applyLifeDensity();
+  }
+
+  /** Traffic and crowd density follow the quality preset; new ones appear around the player. */
+  applyLifeDensity(): void {
+    if (!this.traffic) return;
+    const p = this.player ? this.player.pos : this.tmpV.set(0, 0, 0);
+    this.traffic.setCount(this.quality.trafficCars, p.x, p.z);
+    this.peds.setCount(this.quality.pedestrians, p.x, p.z);
+  }
+
+  /** Advance cars, pedestrians and ring visuals (real-time frames; tests call it explicitly). */
+  updateLife(dt: number): void {
+    const c = this.view === 'play' ? this.renderPos : this.rig.camera.position;
+    this.rig.camera.getWorldDirection(this.tmpN);
+    const l = Math.hypot(this.tmpN.x, this.tmpN.z) || 1;
+    this.traffic.update(dt, c.x, c.z, this.tmpN.x / l, this.tmpN.z / l);
+    this.peds.update(dt, c.x, c.z, this.tmpN.x / l, this.tmpN.z / l);
+    this.rings.refresh();
   }
 
   private onKey(code: string): void {

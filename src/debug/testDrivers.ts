@@ -1,8 +1,8 @@
-import { Vector3 } from 'three';
+import { Matrix4, Vector3 } from 'three';
 import { tuning } from '../config/tuning';
 import { Rng } from '../core/rng';
 import type { Game } from '../game';
-import { BOX, CYL, F_ANCHOR } from '../physics/collision';
+import { BOX, CYL, F_ANCHOR, makeRayHit } from '../physics/collision';
 import { MODE_GROUND, MODE_SWING, MODE_NAMES, MODE_WALL, MODE_ZIP } from '../player/player';
 import { makeAnchorResult } from '../player/targeting';
 
@@ -961,5 +961,197 @@ export function characterTest(game: Game): Record<string, number | string | bool
     zipTicks,
     nanBones,
     statesSeen: [...states].sort().map((i) => names[i]).join(','),
+  };
+}
+
+// -----------------------------------------------------------------------------
+// h. Ring races, traffic and pedestrians
+// -----------------------------------------------------------------------------
+
+export function ringTest(game: Game): Record<string, unknown> {
+  const rings = game.rings;
+  const pl = game.player;
+  const w = game.world;
+  const out: Record<string, unknown> = { routes: rings.routes.length, rings: rings.ringCount };
+  // 1. Every ring is clear of geometry, the straight line to the next ring is open,
+  //    and an anchor is available on the approach to each ring.
+  const perRoute: Array<Record<string, number | string>> = [];
+  const hit = makeRayHit();
+  for (const r of rings.routes) {
+    let clear = 0,
+      lines = 0,
+      anchors = 0,
+      flags = '';
+    for (let i = 0; i < r.rings.length; i++) {
+      const g = r.rings[i]!;
+      if (rings.clear(g.x, g.y, g.z)) clear++;
+      if (i + 1 < r.rings.length) {
+        const n = r.rings[i + 1]!;
+        const dx = n.x - g.x,
+          dy = n.y - g.y,
+          dz = n.z - g.z;
+        const d = Math.hypot(dx, dy, dz);
+        if (!w.raycast(g.x, g.y, g.z, dx / d, dy / d, dz / d, d, hit, 0, -1, 1, true)) lines++;
+      } else lines++;
+      // Approach 20-30 m before the ring at 30 m/s along the route: is a swing
+      // anchor available when looking ahead (or a little to either side)?
+      let found = false;
+      for (const back of [20, 30, 15, 40]) {
+        for (const [dy, side] of [
+          [-1, 0],
+          [2, 0],
+          [0, 6],
+          [0, -6],
+        ] as Array<[number, number]>) {
+          const ax = g.x - g.nx * back - g.nz * side,
+            ay = g.y + dy - 1.1,
+            az = g.z - g.nz * back + g.nx * side;
+          if (!w.capsuleFree(ax, ay, az, tuning.body.radius, tuning.body.height)) continue;
+          for (const yawOff of [0, -0.35, 0.35]) {
+            pl.teleport(ax, ay, az, g.nx * 30, 0, g.nz * 30);
+            game.prevPos.copy(pl.pos);
+            game.rig.setLook(Math.atan2(-g.nx, -g.nz) + yawOff, 0.35);
+            game.snapCamera();
+            const prev = emptyBotInput();
+            for (let k = 0; k < 3; k++) stepWithInput(game, emptyBotInput(), prev);
+            if (pl.swingTarget.valid) {
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) break;
+      }
+      if (found) anchors++;
+      flags += found ? '1' : '0';
+    }
+    perRoute.push({ id: r.id, rings: r.rings.length, clear, openLines: lines, anchorsOnApproach: anchors, anchorFlags: flags });
+  }
+  out.perRoute = perRoute;
+  // 2. Race logic: fly each route kinematically through the ring centres.
+  const fly = (route: number, speed: number): { events: string[]; time: number | null; newBest: boolean | null } => {
+    const r = rings.routes[route]!;
+    const events: string[] = [];
+    let time: number | null = null,
+      newBest: boolean | null = null;
+    rings.onEvent = (e) => {
+      events.push(e.type);
+      if (e.type === 'finish') {
+        time = e.time;
+        newBest = e.newBest;
+      }
+    };
+    const pts: Vector3[] = [];
+    const g0 = r.rings[0]!;
+    pts.push(new Vector3(g0.x - g0.nx * 20, g0.y - g0.ny * 20, g0.z - g0.nz * 20));
+    for (const g of r.rings) pts.push(new Vector3(g.x, g.y, g.z));
+    const gl = r.rings[r.rings.length - 1]!;
+    pts.push(new Vector3(gl.x + gl.nx * 10, gl.y + gl.ny * 10, gl.z + gl.nz * 10));
+    const dt = 1 / 120;
+    const a = new Vector3(),
+      b = new Vector3();
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const p = pts[i]!,
+        q = pts[i + 1]!;
+      const len = p.distanceTo(q);
+      const steps = Math.max(1, Math.ceil(len / (speed * dt)));
+      for (let k = 0; k < steps; k++) {
+        a.lerpVectors(p, q, k / steps);
+        b.lerpVectors(p, q, (k + 1) / steps);
+        rings.check(a, b, dt);
+      }
+    }
+    rings.onEvent = null;
+    return { events, time, newBest };
+  };
+  const races: Array<Record<string, unknown>> = [];
+  for (let r = 0; r < rings.routes.length; r++) {
+    const first = fly(r, 30);
+    const faster = fly(r, 45);
+    const slower = fly(r, 20);
+    races.push({
+      id: rings.routes[r]!.id,
+      passes: first.events.filter((e) => e === 'pass').length,
+      finished: first.events.includes('finish'),
+      time30: first.time,
+      firstNewBest: first.newBest,
+      time45: faster.time,
+      fasterNewBest: faster.newBest,
+      slowerNewBest: slower.newBest,
+      best: rings.bestTime(rings.routes[r]!.id),
+    });
+  }
+  out.races = races;
+  // 3. Abandoned run ends quietly.
+  const g0 = rings.routes[0]!.rings[0]!;
+  rings.check(new Vector3(g0.x - g0.nx, g0.y - g0.ny, g0.z - g0.nz), new Vector3(g0.x + g0.nx, g0.y + g0.ny, g0.z + g0.nz), 1 / 120);
+  const started = rings.activeRoute;
+  const far = new Vector3(0, 300, 0);
+  for (let i = 0; i < 50 * 120; i++) rings.check(far, far, 1 / 120);
+  out.abandon = { started, afterTimeout: rings.activeRoute, hud: rings.hud() };
+  return out;
+}
+
+export function lifeTest(game: Game): Record<string, unknown> {
+  const L = game.layout;
+  const traffic = game.traffic;
+  const peds = game.peds;
+  const onRoad = (x: number, z: number): boolean =>
+    L.avenues.some((a) => Math.abs(x - a.center) <= a.width / 2 + 0.5) || L.streets.some((s) => Math.abs(z - s.center) <= s.width / 2 + 0.5);
+  const counts: Record<string, number> = {};
+  for (let q = 0; q < 4; q++) {
+    game.applyQuality(q);
+    counts[`q${q}cars`] = traffic.count;
+    counts[`q${q}peds`] = peds.count;
+  }
+  game.applyQuality(1);
+  const pos: Array<[number, number]> = [];
+  let offRoad = 0,
+    nan = 0,
+    samples = 0,
+    stoppedMax = 0,
+    turningMax = 0,
+    speedSum = 0;
+  const p = game.player.pos;
+  for (let i = 0; i < 60 * 30; i++) {
+    traffic.update(1 / 30, p.x, p.z);
+    peds.update(1 / 30, p.x, p.z);
+    if (i % 30 === 0) {
+      traffic.positions(pos);
+      for (const [x, z] of pos) {
+        samples++;
+        if (!Number.isFinite(x + z)) nan++;
+        else if (!onRoad(x, z)) offRoad++;
+      }
+      const st = traffic.stats();
+      stoppedMax = Math.max(stoppedMax, st.stopped);
+      turningMax = Math.max(turningMax, st.turning);
+      speedSum += st.meanSpeed;
+    }
+  }
+  // Pedestrians stand on sidewalks or park paths, never on the carriageway.
+  let pedOnRoad = 0;
+  const m = new Matrix4(),
+    v = new Vector3();
+  for (let i = 0; i < peds.count; i++) {
+    peds.mesh.getMatrixAt(i, m);
+    v.setFromMatrixPosition(m);
+    const inPark = v.x > L.park.minX && v.x < L.park.maxX && v.z > L.park.minZ && v.z < L.park.maxZ;
+    if (!inPark && v.y < 0.1) pedOnRoad++;
+  }
+  return {
+    ...counts,
+    nodes: traffic.nodeCount,
+    links: traffic.linkCount,
+    loops: peds.loopCount,
+    carSamples: samples,
+    carsOffRoad: offRoad,
+    carNaN: nan,
+    maxStoppedAtOnce: stoppedMax,
+    maxTurningAtOnce: turningMax,
+    meanSpeed: speedSum / 60,
+    pedsOnRoad: pedOnRoad,
+    peds: peds.count,
   };
 }

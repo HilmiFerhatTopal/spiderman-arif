@@ -5,6 +5,8 @@ import { tuning } from '../config/tuning';
 import {
   anchorAvailability,
   characterTest,
+  lifeTest,
+  ringTest,
   catchTest,
   reattachLatency,
   cityRoute,
@@ -136,6 +138,9 @@ export function installTestApi(game: Game, app?: App): void {
     botUntil: (which: 'city' | 'park', maxSeconds: number, stop: () => boolean) =>
       traversalBot(game, which, which === 'city' ? cityRoute(game) : parkRoute(game), maxSeconds, undefined, false, stop),
     characterTest: () => characterTest(game),
+    ringTest: () => ringTest(game),
+    lifeTest: () => lifeTest(game),
+    updateLife: (dt = 1 / 60) => game.updateLife(dt),
     simTiming(): { msPerTick: number; ticks: number } {
       return { msPerTick: game.simTimeMs / Math.max(1, game.simTicksMeasured), ticks: game.simTicksMeasured };
     },

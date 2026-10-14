@@ -26,7 +26,7 @@ This document is the plan the code follows. It is written before the code and ke
 | `fx/` | Particles and one-shot effects (dust, splash, release burst, landing ring). |
 | `audio/` | Music loader with crossfaded seamless loop, buses (master/music/sfx), synthesized SFX and ambience. |
 | `ui/` | DOM screens (loading, main menu, controls, settings, pause), HUD (crosshair state, speed, altitude, ring timer, cues), rotating minimap, photo mode panel, settings persistence. |
-| `life/` | Instanced traffic with intersection logic, instanced pedestrians. Visual only, never collide with the player. |
+| `life/` | Instanced traffic on a lane graph with traffic-light phases and turns, instanced pedestrians on sidewalk loops and park paths with a shader walk cycle; both stay concentrated around the player. Visual only, never collide with the player. |
 | `extras/` | Ring races (3 routes, timer, best times, minimap markers). |
 | `debug/` | lil-gui panel (backtick), `window.__game` test API (dev builds only), in-page test drivers (fuzz, anchor availability, traversal bots, soak). |
 | `game.ts` | Composition root for the 3D game: loop, simulation, camera views (gameplay rig, menu orbit, photo free camera), hero, effects, rendering. |
