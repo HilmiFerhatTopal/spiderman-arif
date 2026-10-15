@@ -59,11 +59,11 @@ export const tuning = {
   },
   swing: {
     minRope: 12,
-    maxRope: 60,
-    maxRange: 80,
+    maxRope: 70,
+    maxRange: 120,
     minHeightAbove: 4,
     /** Swing anchors must be at least this steep above the hand (shallow = "too low"). */
-    minElevationDeg: 15,
+    minElevationDeg: 12,
     gravityScale: 0.74,
     pumpAccel: 10,
     /** Pumping fades out between pumpMaxSpeed and +10 m/s: W cruises, skill goes faster. */
@@ -79,7 +79,7 @@ export const tuning = {
     reelStep: 2.0,
     reelRange: 9,
     /** Pull-in speed when the anchor was further than maxRope. */
-    pullInSpeed: 16,
+    pullInSpeed: 26,
     groundClearance: 1.4,
     fireSpeed: 1100,
     maxFireTime: 0.06,
@@ -95,13 +95,15 @@ export const tuning = {
     groundLaunchForward: 5,
     landReleaseTime: 0.12,
   },
-  /** Space on a line (swing or zip): let go and spring off it like a jump. */
+  /** Letting go of a line (button up, or Space on a swing or pull line): a push forward and up. */
   cut: {
-    up: 6.5,
-    forward: 1.5,
+    up: 5.5,
+    forward: 4.5,
     /** The forward part fades out between these speeds (the lift stays). */
-    fadeStart: 30,
-    fadeEnd: 48,
+    fadeStart: 32,
+    fadeEnd: 52,
+    /** Seconds on a line for the full push; shorter holds give less (a tap gives none). */
+    fullAfter: 0.4,
   },
   /** Space shortly after a zip end hop or a broken line: an air boost. */
   boost: {
@@ -247,7 +249,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'air.maxFallSpeed': [30, 150, 1],
   'swing.minRope': [5, 30, 0.5],
   'swing.maxRope': [20, 90, 0.5],
-  'swing.maxRange': [30, 120, 1],
+  'swing.maxRange': [30, 160, 1],
   'swing.minHeightAbove': [0, 20, 0.5],
   'swing.minElevationDeg': [0, 60, 1],
   'swing.gravityScale': [0.3, 1.5, 0.01],
@@ -280,6 +282,7 @@ export const tuningMeta: Record<string, [number, number, number]> = {
   'cut.forward': [0, 15, 0.1],
   'cut.fadeStart': [0, 100, 1],
   'cut.fadeEnd': [0, 120, 1],
+  'cut.fullAfter': [0, 2, 0.05],
   'boost.window': [0, 1.5, 0.01],
   'boost.up': [0, 25, 0.5],
   'boost.forward': [0, 25, 0.5],

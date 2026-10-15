@@ -46,9 +46,9 @@ Click **Oyna** (Play) to start; the game captures the mouse (pointer lock). Audi
 | --- | --- |
 | W A S D | Move; steer while swinging |
 | Mouse | Look |
-| Left mouse | Fire a web line where the crosshair points and swing; the line holds without keeping the button down, and a second click moves it to the newly aimed point |
+| Left mouse (hold) | Fire a web line where the crosshair points (up to 120 m) and swing while the button is down; let go to release with a push forward and up. Held with nothing usable under the crosshair, the line fires the moment the crosshair finds a point |
 | Right mouse | Pull line: pulls you toward the aimed point, a little faster than a swing (hop or mantle at the end) |
-| Space | Jump; on a line, cut it and spring off like a jump; wall jump |
+| Space | Jump; on a swing or pull line, cut it with the same push as letting go; wall jump |
 | Shift (hold) | Sprint on the ground; cling to and climb walls |
 | C or Q | Dive in the air (trades height for speed) |
 | Mouse wheel | Reel the line in or out while swinging |
@@ -66,7 +66,7 @@ Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is 
 
 Lines go exactly where the crosshair points (a ring of rays 2.5 degrees around it catches building edges and trunks); the crosshair lights up and a diamond marks the point when a line would hold there. Nothing usable under the crosshair means no line. The camera turns toward the travel direction while you fly fast and leave the mouse alone; switch this off under Ayarlar > Kamera otomatik takip.
 
-Tips: cut the line with Space on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved.
+Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved.
 
 ## Tuning guide
 
@@ -77,7 +77,7 @@ Every gameplay constant lives in `src/config/tuning.ts`, grouped by system. The 
 | `swing` | Pendulum and arcade layer | `gravityScale` (lighter or heavier arcs), `pumpAccel` / `pumpMaxSpeed` (how much W adds), `steerRate`, `catchEfficiency` (speed kept when the rope snaps taut), `minRope` / `maxRope` / `attachLengthFactor`, the good-release window (`goodReleaseMinDeg` / `goodReleaseMaxDeg`) and its launch bonus (`goodReleaseBonus`, `goodReleaseUp`) |
 | `aim`, `assist` | Crosshair aim; the wide anchor search the test bots use to pick where to look | `magnetismDeg`; `range`, `idealDistance`, `maxAimAngleDeg`, score weights |
 | `air` | Flight | `gravity`, `drag`, `softCap` / `capDrag` (soft speed cap around 60 m/s), air control |
-| `cut`, `boost`, `dive` | The jump-like lift when Space cuts a line, the air boost after a zip hop, dive gravity and steering | `cut.up`, `cut.forward`, `window`, `gravityMul` |
+| `cut`, `boost`, `dive` | The push when you let go of a line (or cut it with Space), scaled by the time spent on it; the air boost after a zip hop; dive gravity and steering | `cut.up`, `cut.forward`, `cut.fullAfter`, `window`, `gravityMul` |
 | `zip` | Pull line | `speed` (34 m/s), `startSpeed`, `accel` (ease-in), `cooldown`, `maxRange`, end hop and mantle reach |
 | `wall` | Cling, crawl, wall run, wall jump | `crawlSpeed`, `wallRunMax` |
 | `ground` | Running and parkour | `runSpeed`, `sprintSpeed`, `jumpSpeed`, vault and mantle limits, `hardLandingSpeed`, roll |
@@ -99,7 +99,7 @@ npm run test:quick               # smoke test only
 
 | Test | Checks |
 | --- | --- |
-| a `swing.spec.ts` | Pendulum from 45 degrees: energy drift, period, no NaN, catch conversion, re-attach latency; line controls (click fires at the crosshair and holds, second click moves the line, Space cuts with a lift, clicks at open sky do nothing, the pull line eases in and cuts); camera auto-follow |
+| a `swing.spec.ts` | Pendulum from 45 degrees: energy drift, period, no NaN, catch conversion, re-attach latency; line controls (holding fires at the crosshair and keeps the line, letting go releases with a push, a tap gives none, Space cuts, holding at open sky does nothing, the pull line eases in and cuts); camera auto-follow |
 | b `fuzz.spec.ts` | 12 simulated minutes of random input over 6 seeds: never inside geometry, below ground, out of bounds, NaN or stuck, camera never inside geometry; head-on 95 m/s impacts never tunnel |
 | c `anchors.spec.ts` | Anchor availability from 500 street, rooftop and park positions (>= 95 %) |
 | d `traversal.spec.ts` | Corner-to-corner city bot and tree-to-tree park bot spend < 10 % of the time on the ground |

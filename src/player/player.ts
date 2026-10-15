@@ -156,6 +156,8 @@ export class Player {
   landTimer = 0;
   lastLandImpact = 0;
   airTime = 0;
+  /** Left button held for a swing: fires as soon as the crosshair finds a usable point. */
+  holdSwing = false;
   time = 0;
   tick = 0;
   /** Seconds since the last good release (for the HUD cue). */
@@ -304,15 +306,23 @@ export class Player {
     );
     if (this.wish.lengthSq() > 1) this.wish.normalize();
 
-    // Targeting (reticle) at 60 Hz, fresh on presses.
-    if (inp.swingPressed || inp.zipPressed || this.tick % 2 === 0) this.updateTargets(inp);
+    // Targeting (reticle) at 60 Hz, fresh on presses and while a held button waits for a point.
+    const waiting = this.holdSwing && this.mode !== MODE_SWING;
+    if (inp.swingPressed || inp.zipPressed || waiting || this.tick % 2 === 0) this.updateTargets(inp);
 
-    // Lines: a click fires one where the crosshair points (replacing the
-    // current line) and it holds without keeping the button down; Space cuts
-    // the line and springs off it like a jump.
+    // Swing line: hold the left button to swing. It fires where the crosshair
+    // points on the press, or as soon as the crosshair finds a point while
+    // held; letting go releases the line with a push. Space also cuts a line
+    // (the held button then waits for a new press). The right click starts a
+    // pull line, which Space cuts.
+    if (inp.swingPressed) this.holdSwing = true;
+    if (!inp.swing) this.holdSwing = false;
     if (inp.jumpPressed && (this.mode === MODE_SWING || this.mode === MODE_ZIP)) {
       this.cutLine();
-    } else if (inp.swingPressed && this.mode !== MODE_TRAVERSE && this.swingTarget.valid) {
+      this.holdSwing = false;
+    } else if (inp.swingReleased && this.mode === MODE_SWING) {
+      this.cutLine();
+    } else if (this.holdSwing && this.mode !== MODE_SWING && this.mode !== MODE_TRAVERSE && this.swingTarget.valid) {
       this.fireRope(this.swingTarget);
     } else if (inp.zipPressed && this.zipCooldown <= 0 && this.mode !== MODE_TRAVERSE && this.zipTarget.valid) {
       this.startZip(this.zipTarget);
@@ -738,6 +748,7 @@ export class Player {
     rope.groundTime = 0;
     rope.fromGround = this.mode === MODE_GROUND || this.mode === MODE_WALL;
     rope.tension = 0;
+    this.holdSwing = false;
     this.diving = false;
     if (this.mode === MODE_WALL) this.vel.set(this.wall.nx * 3, 2, this.wall.nz * 3);
     this.setMode(MODE_SWING);
@@ -798,27 +809,37 @@ export class Player {
   }
 
   /**
-   * Space on a swing line or a pull line: let go (a swing keeps its
-   * good-release bonus) and spring off like a jump. The pop is this press's
-   * boost, so no second air boost follows.
+   * Letting go of the swing button, or Space on a swing or pull line: release
+   * with a push forward and up, like springing off the line. The push grows
+   * with the time spent on the line (`cut.fullAfter`), so a tap gives none; a
+   * swing release keeps its good-release bonus. The push replaces the air
+   * boost, so it never doubles up.
    */
   private cutLine(): void {
     const C = tuning.cut;
+    const rope = this.rope;
     this.jumpBuffer = 0;
+    let swung: number;
     if (this.mode === MODE_ZIP) {
+      swung = clamp(this.zip.time / C.fullAfter, 0, 1);
       this.events.push({ type: 'zipEnd' });
       this.events.push({ type: 'release', good: false, broken: false });
       this.setMode(MODE_AIR);
-    } else this.releaseRope(false);
+    } else {
+      swung = rope.attached ? clamp((this.time - rope.attachTime) / C.fullAfter, 0, 1) : 0;
+      this.releaseRope(false);
+    }
     this.boostAvailable = false;
+    if (swung <= 0) return;
     const v = this.vel;
     const hs = Math.hypot(v.x, v.z);
     if (hs > 1) {
       const fade = 1 - clamp((hs - C.fadeStart) / Math.max(1, C.fadeEnd - C.fadeStart), 0, 1);
-      v.x += (v.x / hs) * C.forward * fade;
-      v.z += (v.z / hs) * C.forward * fade;
+      v.x += (v.x / hs) * C.forward * fade * swung;
+      v.z += (v.z / hs) * C.forward * fade * swung;
     }
-    v.y = Math.max(v.y, 0) + C.up;
+    // Cancel the fall in proportion, then lift.
+    v.y += (Math.max(v.y, 0) - v.y) * swung + C.up * swung;
   }
 
   /**
@@ -935,6 +956,8 @@ export class Player {
           rope.firing = false;
           this.setMode(MODE_AIR);
           this.events.push({ type: 'release', good: false, broken: true });
+          // Still holding: retry with the next point under the crosshair.
+          this.holdSwing = inp.swing;
           return;
         }
       } else {
@@ -1059,6 +1082,7 @@ export class Player {
         rope.losBlocked++;
         if (rope.losBlocked >= 3) {
           this.releaseRope(true);
+          this.holdSwing = inp.swing;
           return;
         }
       } else rope.losBlocked = 0;

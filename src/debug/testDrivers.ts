@@ -632,7 +632,6 @@ export function traversalBot(
     inp.sprint = true;
     inp.jump = false;
     inp.dive = false;
-    inp.swing = false;
     stateT += 1 / 120;
     const rope = pl.rope;
     let fire = false;
@@ -642,8 +641,9 @@ export function traversalBot(
         stateT = 0;
         swings++;
       }
+      inp.swing = true;
       const v = pl.vel;
-      // Cut with Space on the rising arc (visible cue), or when past the anchor, or after a while.
+      // Let go on the rising arc (visible cue), or when past the anchor, or after a while.
       const past = rope.attached && (v.x * (rope.anchor.x - p.x) + v.z * (rope.anchor.z - p.z)) < 0;
       // Swing angle from straight down: cut later on the arc when low (to gain height).
       const ax = p.x - rope.anchor.x,
@@ -654,11 +654,12 @@ export function traversalBot(
       const goodNow = rope.goodWindow && ang >= wantAngle;
       if (rope.attached && (goodNow || (past && v.y > 0 && stateT > 0.8) || stateT > 3.2)) {
         if (rope.goodWindow) good++;
-        inp.jump = true;
+        inp.swing = false;
         state = 'fly';
         stateT = 0;
       }
     } else {
+      inp.swing = false;
       if (state === 'swing') {
         state = 'fly';
         stateT = 0;
@@ -673,9 +674,9 @@ export function traversalBot(
         inp.jump = ticks % 50 === 0;
       }
     }
-    // Aim at the next anchor and click; retry every few ticks while nothing is in view.
+    // Aim at the next anchor and press; retry every few ticks while nothing is in view.
     let view: [number, number] | null = null;
-    if (fire && ticks - lastTry >= 3) {
+    if (fire && !prev.swing && ticks - lastTry >= 3) {
       lastTry = ticks;
       view = aimForClick(game, 0, inp, target);
     }
@@ -797,7 +798,7 @@ export function catchTest(game: Game): Record<string, number | boolean> {
   return { speedBefore: before, speedAfterCatch: after, minSpeedDuring: minSpeed, ratio: after / before, stillSwinging: pl.mode === MODE_SWING };
 }
 
-/** Cut a swing with Space and fire again: time from the click until the new line is attached. */
+/** Let go of a swing and press again: time from the press until the new line is attached. */
 export function reattachLatency(game: Game): Record<string, number> {
   const pl = game.player;
   const route = cityRoute(game);
@@ -809,12 +810,9 @@ export function reattachLatency(game: Game): Record<string, number> {
   const inp = emptyBotInput();
   const prev = emptyBotInput();
   const target = makeAnchorResult();
-  const step = (): void => {
-    stepWithInput(game, inp, prev);
-    inp.swing = false;
-    inp.jump = false;
-  };
+  const step = (): void => stepWithInput(game, inp, prev);
   for (let trial = 0; trial < 8; trial++) {
+    inp.swing = false;
     step();
     pl.teleport(out.x, out.y + 18 + trial * 2, out.z - trial * 40, 0, 0, -20);
     game.rig.setLook(0, 0.35);
@@ -822,15 +820,19 @@ export function reattachLatency(game: Game): Record<string, number> {
     inp.moveY = 1;
     let attachedAt = -1;
     for (let i = 0; i < 120 && attachedAt < 0; i++) {
-      if (i % 4 === 0 && !pl.rope.firing && !pl.rope.attached) aimForClick(game, 0, inp, target);
+      if (pl.mode !== MODE_SWING) {
+        // Let go of a press that found nothing, then aim and press again.
+        if (inp.swing) inp.swing = false;
+        else if (i % 4 === 0) aimForClick(game, 0, inp, target);
+      }
       step();
       if (pl.rope.attached) attachedAt = i;
     }
     if (attachedAt < 0) continue;
     for (let i = 0; i < 40; i++) step();
-    // Cut with Space, then click again as soon as an anchor is in view
-    // (a player aims at the next point and clicks).
-    inp.jump = true;
+    // Let go, then press again as soon as an anchor is in view
+    // (a player aims at the next point and presses).
+    inp.swing = false;
     step();
     let waited = 0;
     while (!planTarget(game, 0, target) && waited < 120) {
@@ -844,7 +846,7 @@ export function reattachLatency(game: Game): Record<string, number> {
       ticks++;
       if (pl.rope.attached) break;
     }
-    // Total from the cut to attached, including the wait for an anchor in view.
+    // Total from letting go to attached, including the wait for an anchor in view.
     results.push(((ticks + 1) * 1000) / 120);
     totals.push(((ticks + 1 + waited) * 1000) / 120);
   }
@@ -861,10 +863,11 @@ export function reattachLatency(game: Game): Record<string, number> {
 }
 
 /**
- * The line controls: a click fires where the crosshair points and the line
- * holds without the button; clicking again moves it to the newly aimed
- * point; Space cuts it with a jump-like lift; a click with nothing usable
- * under the crosshair does nothing; the pull line eases in and Space cuts it too.
+ * The line controls: holding the button fires where the crosshair points and
+ * keeps the line; letting go releases it with a push; a tap gives no push;
+ * Space cuts a held line and the held button does not fire again until a new
+ * press; a press with nothing usable under the crosshair does nothing; the
+ * pull line eases in and Space cuts it.
  */
 export function lineControlsTest(game: Game): Record<string, number | boolean> {
   const pl = game.player;
@@ -874,25 +877,23 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
   const inp = emptyBotInput();
   const prev = emptyBotInput();
   const a = makeAnchorResult(),
-    b = makeAnchorResult(),
     z = makeAnchorResult();
   const step = (n = 1): void => {
-    for (let i = 0; i < n; i++) {
-      stepWithInput(game, inp, prev);
-      inp.swing = false;
-      inp.zip = false;
-      inp.jump = false;
-    }
+    for (let i = 0; i < n; i++) stepWithInput(game, inp, prev);
   };
   const events = (from: number): string[] => game.eventLog.slice(from).map((e) => e.type);
   const r: Record<string, number | boolean> = {};
-  // 1. Click: the line goes to the aimed point and holds without the button.
-  pl.teleport(out.x, out.y + 24, out.z, 0, 0, -18);
-  game.rig.setLook(0, 0.35);
-  game.snapCamera();
-  step();
+  const start = (): void => {
+    Object.assign(inp, emptyBotInput());
+    step();
+    pl.teleport(out.x, out.y + 24, out.z, 0, 0, -18);
+    game.rig.setLook(0, 0.35);
+    game.snapCamera();
+    step();
+  };
+  // 1. Hold: the line goes where the crosshair points and stays while held.
+  start();
   r.planned = !!aimForClick(game, 0, inp, a);
-  // The crosshair direction at the click: the line must land within the magnetism radius of it.
   const c = game.rig.position.clone(),
     f = game.rig.fwd.clone();
   step(30);
@@ -901,32 +902,40 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
   const ad = Math.hypot(an.x - c.x, an.y - c.y, an.z - c.z) || 1;
   r.anchorAngleDeg = (Math.acos(Math.min(1, ((an.x - c.x) * f.x + (an.y - c.y) * f.y + (an.z - c.z) * f.z) / ad)) * 180) / Math.PI;
   step(120);
-  r.stillAttachedAfter1s = pl.rope.attached && pl.mode === MODE_SWING;
-  // 2. Click again while swinging: the line moves to the newly aimed point.
-  game.rig.setLook(game.rig.yaw + 0.5, 0.45);
-  game.updateCameraForTest();
-  let moved = false;
-  for (let k = 0; k < 12 && !moved; k++) {
-    if (planTarget(game, 0, b) && Math.hypot(b.x - pl.rope.anchor.x, b.y - pl.rope.anchor.y, b.z - pl.rope.anchor.z) > 5) {
-      aimAt(game, b.x, b.y, b.z);
-      inp.swing = true;
-      step(20);
-      moved = pl.rope.attached && Math.hypot(pl.rope.anchor.x - b.x, pl.rope.anchor.y - b.y, pl.rope.anchor.z - b.z) < 1.5;
-    } else {
-      game.rig.setLook(game.rig.yaw + 0.5, 0.45);
-      game.updateCameraForTest();
-    }
-  }
-  r.refireMoved = moved;
-  // 3. Space cuts the line and lifts like a jump.
-  const vyBefore = pl.vel.y;
-  const e0 = game.eventLog.length;
+  r.stillAttachedWhileHeld = pl.rope.attached && pl.mode === MODE_SWING;
+  // 2. Let go: released with a push.
+  const vy0 = pl.vel.y,
+    hs0 = Math.hypot(pl.vel.x, pl.vel.z);
+  let e0 = game.eventLog.length;
+  inp.swing = false;
+  step();
+  r.releasedToAir = pl.mode !== MODE_SWING && !pl.rope.attached;
+  r.releaseEvent = events(e0).includes('release');
+  r.releaseLift = pl.vel.y - Math.max(vy0, 0);
+  r.releaseForward = Math.hypot(pl.vel.x, pl.vel.z) - hs0;
+  // 3. A tap gives no push.
+  start();
+  aimForClick(game, 0, inp, a);
+  step();
+  const vyTap = pl.vel.y;
+  inp.swing = false;
+  step();
+  r.tapLift = pl.vel.y - vyTap;
+  // 4. Space cuts a held line; the held button waits for a new press.
+  start();
+  aimForClick(game, 0, inp, a);
+  step(60);
+  r.heldBeforeSpace = pl.rope.attached;
+  e0 = game.eventLog.length;
   inp.jump = true;
   step();
-  r.cutToAir = pl.mode !== MODE_SWING && !pl.rope.attached;
-  r.cutEvent = events(e0).includes('release');
-  r.cutLift = pl.vel.y - Math.max(vyBefore, 0);
-  // 4. A click at open sky does nothing.
+  inp.jump = false;
+  step(30);
+  r.spaceCut = pl.mode !== MODE_SWING;
+  r.refiredWhileHeld = events(e0).includes('webFire');
+  inp.swing = false;
+  step();
+  // 5. A press at open sky does nothing.
   pl.teleport(out.x, out.y + 2, out.z);
   game.rig.setLook(0, 1.35);
   game.snapCamera();
@@ -935,14 +944,18 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
   inp.swing = true;
   inp.zip = true;
   step(10);
+  inp.swing = false;
+  inp.zip = false;
+  step();
   r.skyClickFired = events(e1).includes('webFire') || events(e1).includes('zipStart');
-  // 5. Pull line: eases in, Space cuts it with the same lift.
+  // 6. Pull line: eases in, Space cuts it.
   pl.teleport(out.x, out.y, out.z);
   game.rig.setLook(0, 0.3);
   game.snapCamera();
   step(2);
   r.zipPlanned = !!aimForClick(game, 1, inp, z);
   step();
+  inp.zip = false;
   r.zipMode = pl.mode === MODE_ZIP;
   r.zipStartSpeed = pl.vel.length();
   step(24);
@@ -951,6 +964,7 @@ export function lineControlsTest(game: Game): Record<string, number | boolean> {
   const zipVy = pl.vel.y;
   inp.jump = true;
   step();
+  inp.jump = false;
   r.zipCut = pl.mode !== MODE_ZIP && events(e2).includes('zipEnd');
   r.zipCutLift = pl.vel.y - Math.max(zipVy, 0);
   return r;

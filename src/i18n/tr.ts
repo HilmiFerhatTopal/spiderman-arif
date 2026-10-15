@@ -33,9 +33,9 @@ export const tr = {
     rows: [
       ['move', 'Hareket / sallanırken yön ver'],
       ['look', 'Etrafa bak'],
-      ['swing', 'Nişangâhın gösterdiği yere ağ at ve sallan (basılı tutman gerekmez)'],
+      ['swing', 'Nişangâhın gösterdiği yere ağ at ve sallan; bırakınca ivmeyle fırla'],
       ['zip', 'Seni hedefe hızla çeken ağ (zip)'],
-      ['jump', 'Zıpla / ipi kes ve fırla / duvardan sıçra'],
+      ['jump', 'Zıpla / ipi ya da zip ağını kes / duvardan sıçra'],
       ['sprint', 'Koş (yerde) / duvara tutun ve tırman (basılı tut)'],
       ['dive', 'Havada dalış (yüksekliği hıza çevirir)'],
       ['reel', 'Sallanırken ipi kısalt / uzat'],
@@ -59,8 +59,9 @@ export const tr = {
     unbound: 'atanmadı',
     rebind: 'Tuşları değiştir',
     tips: [
-      "Yükselen yayda (nişangâh parlarken) Boşluk'la ipi kesersen ekstra fırlarsın.",
-      'Sallanırken tekrar tıklarsan ip nişan aldığın yeni noktaya geçer.',
+      'Tuşu bıraktığında ip seni ileri ve yukarı fırlatır.',
+      'Yükselen yayda (nişangâh parlarken) bırakırsan ekstra fırlarsın.',
+      'Tuşu basılı tutarken nişangâh bir noktaya değdiği an ağ kendiliğinden atılır.',
       'Dalıştan sonra hemen ağ atarsan hız sallanmaya aktarılır.',
       'Alçak engellerin üstünden koşarken otomatik atlarsın.',
     ],

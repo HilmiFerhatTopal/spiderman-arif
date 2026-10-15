@@ -118,7 +118,7 @@ const CONTROL_ROW_ACTIONS: Partial<Record<ControlRowId, readonly Action[]>> = {
   timePause: ['timePause'],
   timeFast: ['timeFast'],
 };
-const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['timeFast']);
+const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['swing', 'timeFast']);
 const CAPTURE_MOUSE_EVENTS = ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu'] as const;
 const TOAST_MS = 1600;
 const LOADING_FADE_MS = 480;
