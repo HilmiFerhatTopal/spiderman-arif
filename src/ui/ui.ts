@@ -21,6 +21,7 @@ import {
   type Action,
 } from '../input/bindings';
 import { keyLabel, learnKey, loadKeyboardLayout, primaryLabel, slotLabels } from './keyLabels';
+import { COSTUME_IDS, slotCss, type CostumeId } from '../character/costumes';
 import {
   clamp,
   el,
@@ -81,8 +82,8 @@ export interface PhotoOptions {
   onExit: () => void;
 }
 
-type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings';
-type SubScreen = 'controls' | 'settings' | 'bindings';
+type MenuScreen = 'main' | 'pause' | 'controls' | 'settings' | 'bindings' | 'costume';
+type SubScreen = 'controls' | 'settings' | 'bindings' | 'costume';
 type UiSound = 'click' | 'hover';
 type ControlRowId = (typeof tr.controls.rows)[number][0];
 
@@ -102,7 +103,7 @@ interface SliderSpec {
   format: (v: number) => string;
 }
 
-const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings'];
+const SCREEN_NAMES: readonly MenuScreen[] = ['main', 'pause', 'controls', 'settings', 'bindings', 'costume'];
 /** Movement keys in the order players read them ("W A S D"). */
 const MOVE_ACTIONS: readonly Action[] = ['forward', 'left', 'back', 'right'];
 /** Controls-screen rows whose keys come from the bindings; the others use tr.controls.fixedKeys. */
@@ -119,6 +120,22 @@ const CONTROL_ROW_ACTIONS: Partial<Record<ControlRowId, readonly Action[]>> = {
   timeFast: ['timeFast'],
 };
 const HOLD_ROWS: ReadonlySet<ControlRowId> = new Set<ControlRowId>(['swing', 'timeFast']);
+/** Menu card art for a costume: mask with lenses over the shoulders, in the costume's colours. */
+function costumeArt(id: CostumeId): string {
+  const c = (slot: Parameters<typeof slotCss>[1]): string => slotCss(id, slot);
+  const ink = '#111';
+  return (
+    `<svg viewBox="0 0 80 96" aria-hidden="true" focusable="false">` +
+    `<path d="M4 97C6 76 17 67 40 65C63 67 74 76 76 97Z" fill="${c('secondary')}" stroke="${ink}" stroke-width="2.5"/>` +
+    `<path d="M24 97L26 69Q40 63 54 69L56 97Z" fill="${c('primary')}" stroke="${ink}" stroke-width="2"/>` +
+    `<path d="M40 70L43.5 78.5L40 91L36.5 78.5Z M42 76L53 69.5 M38 76L27 69.5" fill="${c('accent')}" stroke="${c('accent')}" stroke-width="2.4" stroke-linecap="round"/>` +
+    `<path d="M40 6C57 6 65 19 65 34C65 51 54 63 40 65C26 63 15 51 15 34C15 19 23 6 40 6Z" fill="${c('primary')}" stroke="${ink}" stroke-width="2.5"/>` +
+    `<path d="M44.5 42C44 33 50 24 57.5 24.5C62 25 63 30 61 35.5C58.5 41 51.5 44 44.5 42Z" fill="${c('lens')}" stroke="${c('rim')}" stroke-width="2.6" stroke-linejoin="round"/>` +
+    `<path d="M35.5 42C36 33 30 24 22.5 24.5C18 25 17 30 19 35.5C21.5 41 28.5 44 35.5 42Z" fill="${c('lens')}" stroke="${c('rim')}" stroke-width="2.6" stroke-linejoin="round"/>` +
+    `</svg>`
+  );
+}
+
 const CAPTURE_MOUSE_EVENTS = ['mousedown', 'mouseup', 'click', 'auxclick', 'contextmenu'] as const;
 const TOAST_MS = 1600;
 const LOADING_FADE_MS = 480;
@@ -322,6 +339,7 @@ export class UI {
       controls: this.buildControls(),
       settings: this.buildSettings(),
       bindings: this.buildBindings(),
+      costume: this.buildCostume(),
     };
     this.menuLayer = el('div', 'sk-menu-layer');
     for (const name of SCREEN_NAMES) this.menuLayer.append(this.screens[name]);
@@ -589,7 +607,7 @@ export class UI {
       return;
     }
     const key = e.key;
-    if ((key === 'Escape' || key === 'Backspace') && (screen === 'controls' || screen === 'settings' || screen === 'bindings')) {
+    if ((key === 'Escape' || key === 'Backspace') && screen !== 'main' && screen !== 'pause') {
       // Handled here: keep it from also reaching the game's own Esc handling.
       e.preventDefault();
       e.stopPropagation();
@@ -699,6 +717,7 @@ export class UI {
     const nav = el('nav', 'sk-menu');
     nav.append(
       this.button(tr.menu.play, 'is-primary is-big', () => this.runWithDefault(this.onPlay, () => this.hideMenus())),
+      this.button(tr.menu.costume, '', (b) => this.openSub('costume', b)),
       this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
     );
@@ -715,11 +734,69 @@ export class UI {
     const nav = el('nav', 'sk-menu');
     nav.append(
       this.button(tr.menu.resume, 'is-primary', () => this.runWithDefault(this.onResume, () => this.hideMenus())),
+      this.button(tr.menu.costume, '', (b) => this.openSub('costume', b)),
       this.button(tr.menu.controls, '', (b) => this.openSub('controls', b)),
       this.button(tr.menu.settings, '', (b) => this.openSub('settings', b)),
       this.button(tr.menu.mainMenu, '', () => this.runWithDefault(this.onMainMenu, () => this.showMainMenu())),
     );
     panel.append(this.panelTitle(tr.menu.paused), nav);
+    screen.append(panel);
+    return screen;
+  }
+
+  // ---------------------------------------------------------------- costume
+
+  /** Four costume cards (a radio group); a pick is worn and saved at once. */
+  private buildCostume(): HTMLDivElement {
+    const screen = el('div', 'sk-screen sk-screen-sub');
+    const panel = el('section', 'sk-center sk-panel sk-panel-costume');
+    const title = this.panelTitle(tr.costume.title);
+    title.id = 'sk-costume-title';
+    const grid = el('div', 'sk-costumes');
+    grid.setAttribute('role', 'radiogroup');
+    grid.setAttribute('aria-labelledby', title.id);
+    const pick = (id: CostumeId): void => {
+      if (this.settings.costume === id) return;
+      this.settings.costume = id;
+      sync();
+      this.commitSettings();
+    };
+    const cards = COSTUME_IDS.map((id, i) => {
+      const b = el('button', 'sk-costume');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.dataset.costume = id;
+      const art = el('span', 'sk-costume-art');
+      art.innerHTML = costumeArt(id);
+      b.append(art, el('span', 'sk-costume-name', tr.costume.names[id]));
+      b.addEventListener('mouseenter', () => this.sound('hover'));
+      b.addEventListener('click', () => {
+        this.sound('click');
+        pick(id);
+      });
+      b.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        const next = COSTUME_IDS[(i + (e.key === 'ArrowRight' ? 1 : COSTUME_IDS.length - 1)) % COSTUME_IDS.length]!;
+        this.sound('click');
+        pick(next);
+        cards[COSTUME_IDS.indexOf(next)]?.focus();
+      });
+      return b;
+    });
+    grid.append(...cards);
+    const sync = (): void => {
+      cards.forEach((b, i) => {
+        const on = COSTUME_IDS[i] === this.settings.costume;
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
+      });
+    };
+    this.settingSyncers.push(sync);
+    sync();
+    const actions = el('div', 'sk-actions');
+    actions.append(this.backButton());
+    panel.append(title, grid, el('p', 'sk-costume-hint', tr.costume.hint), actions);
     screen.append(panel);
     return screen;
   }
@@ -864,9 +941,9 @@ export class UI {
     this.onSettingsChange(this.settings);
   }
 
-  /** Resets this screen's settings; key bindings have their own reset on the bindings screen. */
+  /** Resets this screen's settings; key bindings and the costume have their own screens. */
   private resetSettings(): void {
-    Object.assign(this.settings, DEFAULT_SETTINGS, { bindings: this.settings.bindings });
+    Object.assign(this.settings, DEFAULT_SETTINGS, { bindings: this.settings.bindings, costume: this.settings.costume });
     this.syncSettings();
     this.commitSettings();
   }

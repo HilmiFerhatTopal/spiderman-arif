@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import { expectClean, saveResult } from './helpers';
 
 // (g) Shell: settings round-trip through the real settings screen and
-// localStorage (including a corrupt entry), the audio graph and music decode
-// after the first gesture, M mute, pause on pointer-lock loss, resume, and
-// photo mode PNG export.
+// localStorage (including a corrupt entry), the costume picker, the audio
+// graph and music decode after the first gesture, M mute, pause on
+// pointer-lock loss, resume, and photo mode PNG export.
 
 async function openShell(page: Page): Promise<string[]> {
   const problems: string[] = [];
@@ -75,17 +75,38 @@ test('g. settings persist, audio decodes, pause/resume and photo export work', a
   expect(reset.settings).toMatchObject({ quality: 1, renderScale: 1, dynamicResolution: true, fovOffset: 0, sensitivity: 1, invertY: false, showFps: false });
   await page.keyboard.press('Escape');
 
+  // --- Costume screen: a pick is worn at once, saved and kept on reload -------
+  const costume = () =>
+    page.evaluate(() => {
+      const g = (window as any).__game;
+      return { worn: g.game.hero.costume, setting: g.app.ui.settings.costume, stored: JSON.parse(localStorage.getItem('skythread.settings.v1') ?? '{}').costume };
+    });
+  expect((await costume()).worn).toBe('redNavy');
+  await page.getByRole('button', { name: 'Kostüm' }).first().click();
+  await expect(page.getByRole('radio', { name: 'Kırmızı-Lacivert' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('radio', { name: 'Siyah-Altın' }).click();
+  expect(await costume()).toEqual({ worn: 'blackGold', setting: 'blackGold', stored: 'blackGold' });
+  // Arrow keys move the pick along the row.
+  await page.getByRole('radio', { name: 'Siyah-Altın' }).press('ArrowRight');
+  expect(await costume()).toEqual({ worn: 'blackWhite', setting: 'blackWhite', stored: 'blackWhite' });
+  await expect(page.getByRole('radio', { name: 'Siyah-Beyaz' })).toBeFocused();
+  await page.getByRole('radio', { name: 'Kırmızı-Altın' }).click();
+  await page.keyboard.press('Escape');
+  await page.reload();
+  problems = await openShell(page);
+  expect(await costume()).toEqual({ worn: 'redGold', setting: 'redGold', stored: 'redGold' });
+
   // --- Corrupt storage is clamped, never fatal --------------------------------
   await page.evaluate(() => localStorage.setItem('skythread.settings.v1', '{"quality":9,"fovOffset":"abc","sensitivity":1e9,"invertY":"yes"'));
   await page.reload();
   problems = await openShell(page);
   const corrupt = await gameState(page);
   expect(corrupt.settings).toMatchObject({ fovOffset: 0, invertY: false });
-  await page.evaluate(() => localStorage.setItem('skythread.settings.v1', '{"quality":9,"fovOffset":"abc","sensitivity":1e9,"invertY":"yes"}'));
+  await page.evaluate(() => localStorage.setItem('skythread.settings.v1', '{"quality":9,"fovOffset":"abc","sensitivity":1e9,"invertY":"yes","costume":"gold"}'));
   await page.reload();
   problems = await openShell(page);
   const clamped = await gameState(page);
-  expect(clamped.settings).toMatchObject({ quality: 3, fovOffset: 0, sensitivity: 3, invertY: false });
+  expect(clamped.settings).toMatchObject({ quality: 3, fovOffset: 0, sensitivity: 3, invertY: false, costume: 'redNavy' });
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   problems = await openShell(page);

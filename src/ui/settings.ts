@@ -6,6 +6,7 @@
  */
 
 import { DEFAULT_BINDINGS, sanitizeBindings, type Bindings } from '../input/bindings';
+import { DEFAULT_COSTUME, isCostumeId, type CostumeId } from '../character/costumes';
 
 export interface Settings {
   /** 0 Low, 1 Medium, 2 High, 3 Ultra. */
@@ -29,6 +30,8 @@ export interface Settings {
   showFps: boolean;
   /** Key and mouse bindings (see src/input/bindings.ts); replaced, never mutated. */
   bindings: Bindings;
+  /** Hero costume (src/character/costumes.ts). */
+  costume: CostumeId;
 }
 
 export const SETTINGS_KEY = 'skythread.settings.v1';
@@ -63,6 +66,7 @@ export const DEFAULT_SETTINGS: Settings = Object.freeze<Settings>({
   dayLengthMinutes: 12,
   showFps: false,
   bindings: DEFAULT_BINDINGS,
+  costume: DEFAULT_COSTUME,
 });
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -111,6 +115,7 @@ export function sanitizeSettings(data: unknown): Settings {
     dayLengthMinutes: num('dayLengthMinutes'),
     showFps: boolOr(o.showFps, d.showFps),
     bindings: sanitizeBindings(o.bindings),
+    costume: isCostumeId(o.costume) ? o.costume : d.costume,
   };
 }
 

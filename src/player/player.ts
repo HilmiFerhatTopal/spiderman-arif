@@ -34,7 +34,8 @@ export type PlayerEvent =
   | { type: 'land'; impact: number; surface: number; roll: boolean }
   | { type: 'webFire'; hand: number; x: number; y: number; z: number }
   | { type: 'attach'; hand: number; x: number; y: number; z: number; nx: number; ny: number; nz: number }
-  | { type: 'release'; good: boolean; broken: boolean }
+  /** power: 0..1 share of the release push (0 for a tap or a broken line). */
+  | { type: 'release'; good: boolean; broken: boolean; power: number }
   | { type: 'boost' }
   | { type: 'dive' }
   | { type: 'zipStart'; x: number; y: number; z: number; hand: number }
@@ -783,7 +784,7 @@ export class Player {
     this.events.push({ type: 'attach', hand: rope.hand, x: a.x, y: a.y, z: a.z, nx: a.nx, ny: a.ny, nz: a.nz });
   }
 
-  releaseRope(broken: boolean): void {
+  releaseRope(broken: boolean, power = 0): void {
     const S = tuning.swing;
     const rope = this.rope;
     let good = false;
@@ -805,7 +806,7 @@ export class Player {
     this.boostTimer = tuning.boost.window;
     this.boostAvailable = true;
     this.setMode(MODE_AIR);
-    this.events.push({ type: 'release', good, broken });
+    this.events.push({ type: 'release', good, broken, power });
   }
 
   /**
@@ -823,11 +824,11 @@ export class Player {
     if (this.mode === MODE_ZIP) {
       swung = clamp(this.zip.time / C.fullAfter, 0, 1);
       this.events.push({ type: 'zipEnd' });
-      this.events.push({ type: 'release', good: false, broken: false });
+      this.events.push({ type: 'release', good: false, broken: false, power: swung });
       this.setMode(MODE_AIR);
     } else {
       swung = rope.attached ? clamp((this.time - rope.attachTime) / C.fullAfter, 0, 1) : 0;
-      this.releaseRope(false);
+      this.releaseRope(false, swung);
     }
     this.boostAvailable = false;
     if (swung <= 0) return;
@@ -955,7 +956,7 @@ export class Player {
         else {
           rope.firing = false;
           this.setMode(MODE_AIR);
-          this.events.push({ type: 'release', good: false, broken: true });
+          this.events.push({ type: 'release', good: false, broken: true, power: 0 });
           // Still holding: retry with the next point under the crosshair.
           this.holdSwing = inp.swing;
           return;
@@ -1057,7 +1058,7 @@ export class Player {
     // Wall grab while swinging.
     if (c.wall && c.wallClimbable && inp.sprint && this.canCling(c.wallId)) {
       rope.attached = false;
-      this.events.push({ type: 'release', good: false, broken: false });
+      this.events.push({ type: 'release', good: false, broken: false, power: 0 });
       this.enterWall(c.wallId, c.wallNX, c.wallNZ, true);
       return;
     }
@@ -1067,7 +1068,7 @@ export class Player {
       if (rope.groundTime > S.landReleaseTime) {
         const hs = Math.hypot(v.x, v.z);
         rope.attached = false;
-        this.events.push({ type: 'release', good: false, broken: false });
+        this.events.push({ type: 'release', good: false, broken: false, power: 0 });
         this.land(0, hs, c.groundSurface);
         return;
       }

@@ -1153,6 +1153,18 @@ export function characterTest(game: Game): Record<string, number | string | bool
       sample();
     }
   }
+  // 3. Hard landing straight down onto the avenue: the crouch puts a hand on the ground.
+  if (!pl.findSafeSpot(ave, 0.5, s0 - 30, out)) out.set(ave, 0.1, s0 - 30);
+  pl.teleport(out.x, out.y + 14, out.z);
+  game.rig.setLook(0, -0.1);
+  game.snapCamera();
+  Object.assign(inp, emptyBotInput());
+  an.crouchPeak = 0;
+  for (let i = 0; i < 300; i++) {
+    stepWithInput(game, inp, prev);
+    sample();
+  }
+  const crouchPeak = an.crouchPeak;
   an.diagnostics = false;
   an.onFootstep = null;
   const names = ['idle', 'run', 'air', 'swing', 'dive', 'zip', 'wall', 'traverse', 'roll', 'release'];
@@ -1168,6 +1180,10 @@ export function characterTest(game: Game): Record<string, number | string | bool
     zipTicks,
     nanBones,
     statesSeen: [...states].sort().map((i) => names[i]).join(','),
+    crouchPeak,
+    tricksSpread: an.tricks[0]!,
+    tricksFlip: an.tricks[1]!,
+    tricksTwist: an.tricks[2]!,
   };
 }
 

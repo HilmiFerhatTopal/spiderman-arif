@@ -22,7 +22,7 @@ This document is the plan the code follows. It is written before the code and ke
 | `camera/` | Spring-arm third-person camera with collision, FOV by speed, look-ahead, landing shake. |
 | `world/` | City layout generator (grid, districts, park, waterfront, bridge), building generator (base/body/crown, setbacks, trims, rooftop props, signage), trees, street dressing, geometry builder, chunked render meshes, sky, day-night, water. |
 | `render/` | Renderer setup, cel materials (MeshToonMaterial patched through `onBeforeCompile`), post pipeline (MRT color+normal+depth, outline composite, speed lines, FXAA), dynamic resolution. |
-| `character/` | Procedural 21-joint humanoid built from rounded primitives, procedural animation (gait with planted-foot IK, swing, dive, zip, wall crawl, mantle, roll), web line and impact splat. |
+| `character/` | Procedural 21-joint humanoid built from rounded primitives with projected lens and emblem decals, costumes as per-vertex colour slots, procedural animation (gait with planted-foot IK, swing, dive, zip, wall crawl, mantle, roll, release flips and corkscrews, landing crouch), web line and impact splat. |
 | `fx/` | Particles and one-shot effects (dust, splash, release burst, landing ring). |
 | `audio/` | Music loader with crossfaded seamless loop, buses (master/music/sfx), synthesized SFX and ambience. |
 | `ui/` | DOM screens (loading, main menu, controls, settings, key bindings, pause), HUD (crosshair state, speed, altitude, ring timer, cues), rotating minimap, photo mode panel, settings persistence, key captions from the player's keyboard layout (`keyLabels.ts`). |
@@ -125,7 +125,7 @@ Dynamic resolution lowers the internal render scale when the frame time exceeds 
 `window.__game` (dev builds) exposes: manual stepping, input injection, look control, teleport, state read-back, renderer stats, time of day, fixed camera poses for screenshots, UI visibility, and in-page drivers for the protocol in `docs/spec/05`: rope test, collision fuzz, anchor availability, traversal bots, soak, plus the character test (foot sliding, limb clipping) and ring races. Playwright specs in `tests/` call these drivers and assert the thresholds; numbers are written to `test-results/*.json`:
 
 - a `swing.spec.ts` rope and swing, b `fuzz.spec.ts` collision fuzz plus b2 head-on 95 m/s tunnelling check, c `anchors.spec.ts` anchor availability, d `traversal.spec.ts` traversal bots, e `soak.spec.ts` soak,
-- f `character.spec.ts` planted feet and limb clipping, g `ui.spec.ts` settings/audio/pause/photo flow, h `rings.spec.ts` ring races, traffic and pedestrians, i `keybindings.spec.ts` rebinding and its effect in game, plus `smoke.spec.ts` (clean console, no request leaves the origin).
+- f `character.spec.ts` planted feet and limb clipping, landing crouch and release tricks, g `ui.spec.ts` settings/costume/audio/pause/photo flow, h `rings.spec.ts` ring races, traffic and pedestrians, i `keybindings.spec.ts` rebinding and its effect in game, plus `smoke.spec.ts` (clean console, no request leaves the origin).
 
 ## 10. Launchers
 

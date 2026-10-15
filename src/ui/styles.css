@@ -2097,3 +2097,109 @@ label.sk-st-label {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------------- costume picker */
+
+.sk-panel-costume {
+  width: 46rem;
+}
+
+.sk-costumes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.1rem;
+  margin-top: 0.6rem;
+}
+
+.sk-costume {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0.9rem 0.5rem 0.8rem;
+  border: 0;
+  background: transparent;
+  isolation: isolate;
+  color: var(--sk-ink);
+  font-family: var(--sk-font-head);
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.95rem;
+  line-height: 1.05;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  outline: none;
+}
+
+.sk-costume::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border: 3px solid var(--sk-ink);
+  background: #fffdf8;
+  box-shadow: 4px 4px 0 var(--sk-ink);
+  transform: skewX(-4deg);
+  transition:
+    transform 0.08s ease-out,
+    box-shadow 0.08s ease-out,
+    background-color 0.08s ease-out;
+}
+
+.sk-costume:hover::before {
+  background-color: var(--sk-amber-soft);
+}
+
+.sk-costume[aria-checked='true']::before {
+  background-color: var(--sk-amber);
+  box-shadow: 1px 1px 0 var(--sk-ink);
+  transform: skewX(-4deg) translate(3px, 3px);
+}
+
+.sk-costume:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: -0.4rem;
+  border: 3px solid var(--sk-teal-hi);
+  pointer-events: none;
+  transform: skewX(-4deg);
+}
+
+.sk-costume-art {
+  display: block;
+  width: 5.6rem;
+  height: 6.7rem;
+  border-radius: 50% 50% 0.4rem 0.4rem;
+  background: radial-gradient(circle at 50% 38%, #e8eef2 0%, #b9c6cf 70%, #93a3ae 100%);
+  overflow: hidden;
+}
+
+.sk-costume-art svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sk-costume-name {
+  text-align: center;
+}
+
+.sk-costume[aria-checked='true'] .sk-costume-art,
+.sk-costume[aria-checked='true'] .sk-costume-name {
+  transform: translate(3px, 3px);
+}
+
+.sk-costume-hint {
+  margin: 1.1rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .sk-costumes {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

@@ -66,6 +66,8 @@ Dive is on C/Q instead of Ctrl because Ctrl+W closes the browser tab while W is 
 
 Lines go exactly where the crosshair points (a ring of rays 2.5 degrees around it catches building edges and trunks); the crosshair lights up and a diamond marks the point when a line would hold there. Nothing usable under the crosshair means no line. The camera turns toward the travel direction while you fly fast and leave the mouse alone; switch this off under Ayarlar > Kamera otomatik takip.
 
+Costumes: **Kostüm** in the main menu or the pause menu dresses the hero in one of four suits (Kırmızı-Lacivert, Kırmızı-Altın, Siyah-Altın, Siyah-Beyaz); the pick is worn at once and saved with the settings.
+
 Tips: let go on the rising part of a swing while the crosshair pulses for a launch bonus ("MÜKEMMEL BIRAKIŞ!"); fire a line right after a dive to carry the speed into the swing. Fly through the first ring of a route (park, towers, waterfront) to start a timed run; best times are saved.
 
 ## Tuning guide
@@ -104,8 +106,8 @@ npm run test:quick               # smoke test only
 | c `anchors.spec.ts` | Anchor availability from 500 street, rooftop and park positions (>= 95 %) |
 | d `traversal.spec.ts` | Corner-to-corner city bot and tree-to-tree park bot spend < 10 % of the time on the ground |
 | e `soak.spec.ts` | 30 simulated minutes of mixed play: clean console, no heap growth trend, no GPU resource growth |
-| f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry, bones stay finite |
-| g `ui.spec.ts` | Settings round trip and corrupt storage, audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export |
+| f `character.spec.ts` | Planted feet never slide, limbs stay out of geometry (including the hard-landing crouch), bones stay finite; strong releases do air tricks |
+| g `ui.spec.ts` | Settings round trip and corrupt storage, costume picker (worn at once, arrow keys, saved across reloads), audio unlock and music decode, mute, pause on lock loss, resume, photo PNG export |
 | h `rings.spec.ts` | Ring routes clear and reachable, race logic and best times; traffic on roads with stops and turns; pedestrians off the carriageway |
 | i `keybindings.spec.ts` | Rebinding with keys and mouse buttons (conflicts, cancel, clear, reserved keys, no click-through, arrow-key navigation), controls screen and photo panel follow the bindings, the game reacts to the new keys only, persistence and corrupt storage |
 | `smoke.spec.ts` | Page loads with a clean console and no request leaves the origin |
@@ -128,7 +130,7 @@ src/
   camera/           spring-arm camera with collision
   world/            city generator, collision proxies, chunked city visuals, sky, day-night
   render/           cel materials, outline post-process, FXAA, dynamic resolution
-  character/        procedural humanoid, animator (gait IK, poses, limb collision), web line
+  character/        procedural humanoid and costumes, animator (gait IK, poses, tricks, limb collision), web line
   fx/               particles
   life/             traffic and pedestrians
   extras/           ring races

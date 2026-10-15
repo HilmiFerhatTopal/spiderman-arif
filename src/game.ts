@@ -25,7 +25,8 @@ import { generateCity } from './world/cityGen';
 import { buildCollisionWorld } from './world/cityCollision';
 import type { CityLayout } from './world/types';
 import { DebugPanel } from './debug/debugPanel';
-import { buildCharacter, type CharacterRig } from './character/rig';
+import { buildCharacter, setCostume, type CharacterRig } from './character/rig';
+import type { CostumeId } from './character/costumes';
 import { CharacterAnimator } from './character/animator';
 import { WebLine, type WebLineState } from './character/webLine';
 import { Particles } from './fx/particles';
@@ -498,6 +499,11 @@ export class Game {
     this.post.render(this.scene, this.rig.camera, this.time);
     this.frameStats.calls = this.renderer.info.render.calls;
     this.frameStats.triangles = this.renderer.info.render.triangles;
+  }
+
+  /** Dress the hero in another costume (a vertex colour write, no rebuild). */
+  setCostume(id: CostumeId): void {
+    if (this.hero.costume !== id) setCostume(this.hero, id);
   }
 
   applyQuality(index: number): void {

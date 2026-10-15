@@ -17,6 +17,12 @@ const S_TRAV = 7;
 const S_ROLL = 8;
 const S_RELEASE = 9;
 const NSTATE = 10;
+/** Air tricks after letting go of a line. */
+const TRICK_SPREAD = 0;
+const TRICK_FLIP = 1;
+const TRICK_TWIST = 2;
+/** Strong releases cycle through these. */
+const TRICK_CYCLE = [TRICK_FLIP, TRICK_TWIST, TRICK_SPREAD] as const;
 const N = JOINTS.length;
 const J = Object.fromEntries(JOINTS.map((n, i) => [n, i])) as Record<JointName, number>;
 
@@ -50,6 +56,8 @@ const _ld = new Vector3();
 const _lt = new Vector3();
 const _lm = new Vector3();
 const _xAxis = new Vector3(1, 0, 0);
+const _ct = new Vector3();
+const _keep = [new Quaternion(), new Quaternion(), new Quaternion()];
 
 interface FootPlant {
   planted: boolean;
@@ -108,8 +116,12 @@ export class CharacterAnimator {
   private feetReady = false;
   private readonly wallRay = makeRayHit();
   private sinceRelease = 99;
-  private goodRelease = false;
+  private trick = TRICK_SPREAD;
+  private trickCount = 0;
   private sinceLand = 99;
+  /** Strength of the landing crouch set by the last landing, and its weight this frame. */
+  private crouch = 0;
+  private crouchW = 0;
   private crawl = 0;
   private wallRunT = 0;
   private initialized = false;
@@ -128,6 +140,9 @@ export class CharacterAnimator {
   limbPenetration = 0;
   /** Diagnostics: joint with the deepest penetration this frame. */
   limbPenetrationJoint = '';
+  /** Diagnostics: release tricks started (spread, flip, corkscrew) and the deepest landing crouch. */
+  readonly tricks = [0, 0, 0];
+  crouchPeak = 0;
   private readonly prevFoot = [new Vector3(), new Vector3()];
   private readonly prevPlant = [new Vector3(), new Vector3()];
   private readonly prevPlanted = [false, false];
@@ -141,10 +156,16 @@ export class CharacterAnimator {
   onEvent(e: PlayerEvent): void {
     if (e.type === 'release') {
       this.sinceRelease = 0;
-      this.goodRelease = e.good;
+      // A good release always flips; other strong, fast releases take turns
+      // between a flip, a corkscrew and the spread; weak ones spread.
+      const strong = !e.broken && e.power > 0.6 && this.player.vel.length() > 12;
+      this.trick = e.good ? TRICK_FLIP : strong ? TRICK_CYCLE[this.trickCount++ % TRICK_CYCLE.length]! : TRICK_SPREAD;
+      this.tricks[this.trick]!++;
     } else if (e.type === 'land') {
       this.sinceLand = 0;
       if (e.impact > 6) this.hipsDrop.velocity -= Math.min(4, e.impact * 0.09);
+      // Hard landings without a roll drop into a crouch with one hand on the ground.
+      this.crouch = !e.roll && e.impact > 9 ? clamp((e.impact - 9) / 12, 0.45, 1) : 0;
     } else if (e.type === 'attach' || e.type === 'zipStart' || e.type === 'wallGrab') {
       this.sinceRelease = 99;
     }
@@ -199,6 +220,12 @@ export class CharacterAnimator {
     // ---- Root orientation -------------------------------------------------
     const v = p.vel;
     const hs = Math.hypot(v.x, v.z);
+    const ct = this.sinceLand;
+    this.crouchW =
+      (state === S_IDLE || state === S_RUN) && this.crouch > 0
+        ? this.crouch * (ct < 0.08 ? smoothstep(0, 0.08, ct) : 1 - smoothstep(0.32, 0.8, ct)) * (1 - smoothstep(1.5, 6, hs))
+        : 0;
+    this.crouchPeak = Math.max(this.crouchPeak, this.crouchW);
     let targetYaw = this.yaw;
     if (state === S_WALL) targetYaw = Math.atan2(-p.wall.nx, -p.wall.nz);
     else if (hs > 0.8) targetYaw = Math.atan2(v.x, v.z);
@@ -208,6 +235,7 @@ export class CharacterAnimator {
     _fwd.set(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     _bodyUp.copy(UP);
     let flip = 0;
+    let twist = 0;
     if (state === S_SWING) {
       const a = p.rope.anchor;
       _v.set(a.x - feetPos.x, a.y - (feetPos.y + 1.1), a.z - feetPos.z).normalize();
@@ -222,7 +250,8 @@ export class CharacterAnimator {
       // Lean into the flight path a little.
       const sp = v.length();
       if (sp > 4) _bodyUp.copy(UP).addScaledVector(_v.copy(v).multiplyScalar(1 / sp), 0.35).normalize();
-      if (state === S_RELEASE && this.goodRelease) flip = smoothstep(0, 0.6, this.sinceRelease) * Math.PI * 2;
+      if (state === S_RELEASE && this.trick === TRICK_FLIP) flip = smoothstep(0, 0.6, this.sinceRelease) * Math.PI * 2;
+      else if (state === S_RELEASE && this.trick === TRICK_TWIST) twist = smoothstep(0.02, 0.7, this.sinceRelease) * Math.PI * 2;
     } else if (state === S_RUN) {
       const lean = 0.07 + 0.26 * smoothstep(3, 16, hs);
       _bodyUp.copy(UP).addScaledVector(_fwd, lean).normalize();
@@ -230,6 +259,8 @@ export class CharacterAnimator {
       const rp = 1 - p.rollTimer / tuning.ground.rollDuration;
       flip = smoothstep(0, 1, rp) * Math.PI * 2;
     }
+    // Landing crouch: the body pitches forward over the knees.
+    if (this.crouchW > 0) _bodyUp.addScaledVector(_fwd, 0.55 * this.crouchW).normalize();
     // Basis: up = bodyUp, forward = fwd projected.
     _v2.copy(_fwd).addScaledVector(_bodyUp, -_fwd.dot(_bodyUp));
     if (_v2.lengthSq() < 1e-6) _v2.copy(_fwd);
@@ -241,13 +272,18 @@ export class CharacterAnimator {
       _q.setFromAxisAngle(_right, flip);
       this.rootTarget.premultiply(_q);
     }
-    const snap = state === S_ROLL || (state === S_RELEASE && this.goodRelease);
+    if (twist !== 0) {
+      // Corkscrew around the flight direction.
+      _q.setFromAxisAngle(_v2, twist);
+      this.rootTarget.premultiply(_q);
+    }
+    const snap = state === S_ROLL || (state === S_RELEASE && this.trick !== TRICK_SPREAD);
     // Settle upright quickly on a wall so a tilted swing pose never leans into it.
     this.rootQ.slerp(this.rootTarget, snap ? 1 : dampFactor(state === S_WALL ? 30 : 16, dt));
 
     // Hips height: crouch on landings, lower while running so the legs can reach.
     this.hipsDrop.update(0, 9, dt);
-    let hipsY = 0.98 + Math.max(-0.42, this.hipsDrop.value) * 0.18;
+    let hipsY = 0.98 + Math.max(-0.42, this.hipsDrop.value) * 0.18 - 0.34 * this.crouchW;
     if (state === S_ROLL) hipsY -= 0.42 * Math.sin(Math.PI * clamp(1 - p.rollTimer / tuning.ground.rollDuration, 0, 1));
     const loco = this.weights[S_IDLE]!.value + this.weights[S_RUN]!.value;
     if (loco > 0.002 || state === S_IDLE || state === S_RUN) {
@@ -458,6 +494,7 @@ export class CharacterAnimator {
         this.setE(s, 'handL', 0, 0, 0.1);
         this.setE(s, 'handR', 0, 0, -0.1);
         this.groundLegs(s);
+        this.crouchPose(s, feet, headYaw);
         break;
       }
       case S_RUN: {
@@ -477,6 +514,7 @@ export class CharacterAnimator {
         this.setE(s, 'handR', 0, 0, 0);
         this.setE(s, 'chest', 0.05 * sprint, (aL - aR) * 0.12, 0);
         this.setE(s, 'spine', 0.04 + 0.02 * Math.cos(ph * 2), -(aL - aR) * 0.05, 0);
+        this.crouchPose(s, feet, headYaw);
         break;
       }
       case S_AIR: {
@@ -500,7 +538,25 @@ export class CharacterAnimator {
       }
       case S_RELEASE: {
         const k = smoothstep(0, 0.25, this.sinceRelease);
-        if (this.goodRelease) {
+        if (this.trick === TRICK_TWIST) {
+          // Corkscrew: arms folded to the chest, legs long and together, toes pointed.
+          const tw = Math.sin(Math.PI * clamp(this.sinceRelease / 0.7, 0, 1));
+          this.setE(s, 'thighL', -0.1 * tw, 0, 0.02);
+          this.setE(s, 'thighR', -0.05 * tw, 0, -0.02);
+          this.setE(s, 'shinL', 0.15 + 0.3 * tw, 0, 0);
+          this.setE(s, 'shinR', 0.1, 0, 0);
+          this.setE(s, 'upperArmL', -0.5 * tw, 0, 0.25 + 0.9 * (1 - tw));
+          this.setE(s, 'upperArmR', -0.5 * tw, 0, -0.25 - 0.9 * (1 - tw));
+          this.setE(s, 'foreArmL', -2.1 * tw - 0.25, 0, 0);
+          this.setE(s, 'foreArmR', -2.1 * tw - 0.25, 0, 0);
+          this.setE(s, 'footL', 0.8, 0, 0);
+          this.setE(s, 'footR', 0.8, 0, 0);
+          this.setE(s, 'handL', 0, 0, 0);
+          this.setE(s, 'handR', 0, 0, 0);
+          this.setE(s, 'chest', -0.1 * k, 0, 0);
+          break;
+        }
+        if (this.trick === TRICK_FLIP) {
           // Tucked flip
           const tk = Math.sin(Math.PI * clamp(this.sinceRelease / 0.6, 0, 1));
           this.setE(s, 'thighL', -1.6 * tk - 0.3, 0, 0.1);
@@ -531,25 +587,28 @@ export class CharacterAnimator {
         const hand = p.rope.hand; // 0 left, 1 right
         const a = p.rope.anchor;
         const swingUp = clamp(v.y / 14, -1, 1);
-        // Legs trail behind the motion, tuck as the arc rises.
+        // Knees together and bent like a seat through the bottom of the arc, pulled
+        // up into a tuck as it rises, stretched back on the drop.
         const tuck = Math.max(0, swingUp);
         const trail = Math.max(0, -swingUp);
-        this.setE(s, 'thighL', -0.2 - 0.9 * tuck + 0.35 * trail, 0, 0.06);
-        this.setE(s, 'shinL', 0.5 + 0.9 * tuck + 0.3 * trail, 0, 0);
-        this.setE(s, 'thighR', 0.1 - 0.5 * tuck + 0.45 * trail, 0, -0.06);
-        this.setE(s, 'shinR', 0.8 + 0.6 * tuck, 0, 0);
-        this.setE(s, 'footL', 0.4, 0, 0);
-        this.setE(s, 'footR', 0.4, 0, 0);
-        this.setE(s, 'chest', -0.12, 0, hand === 0 ? -0.12 : 0.12);
-        // Free arm out for balance.
+        const fast = smoothstep(10, 30, Math.hypot(v.x, v.y, v.z));
+        this.setE(s, 'thighL', -0.5 - 0.95 * tuck + 0.6 * trail, 0, 0.03);
+        this.setE(s, 'shinL', 0.95 + 0.85 * tuck - 0.35 * trail, 0, 0);
+        this.setE(s, 'thighR', -0.25 - 0.65 * tuck + 0.75 * trail, 0, -0.03);
+        this.setE(s, 'shinR', 1.3 + 0.55 * tuck - 0.3 * trail, 0, 0);
+        this.setE(s, 'footL', 0.6, 0, 0);
+        this.setE(s, 'footR', 0.7, 0, 0);
+        // Chest turns toward the line hand.
+        this.setE(s, 'chest', -0.12, hand === 0 ? 0.16 : -0.16, hand === 0 ? -0.12 : 0.12);
+        // Free arm flung out and back for balance, higher with speed.
         if (hand === 0) {
-          this.setE(s, 'upperArmR', 0.4, 0, -1.25);
-          this.setE(s, 'foreArmR', -0.35, 0, 0);
-          this.setE(s, 'handR', 0, 0, 0);
+          this.setE(s, 'upperArmR', 0.55 + 0.3 * fast, 0, -1.2 - 0.3 * fast);
+          this.setE(s, 'foreArmR', -0.25, 0, 0);
+          this.setE(s, 'handR', 0, 0, -0.2);
         } else {
-          this.setE(s, 'upperArmL', 0.4, 0, 1.25);
-          this.setE(s, 'foreArmL', -0.35, 0, 0);
-          this.setE(s, 'handL', 0, 0, 0);
+          this.setE(s, 'upperArmL', 0.55 + 0.3 * fast, 0, 1.2 + 0.3 * fast);
+          this.setE(s, 'foreArmL', -0.25, 0, 0);
+          this.setE(s, 'handL', 0, 0, 0.2);
         }
         // Active arm reaches up the line (IK, nearly straight).
         this.armIK(s, hand, _v3.set(a.x, a.y, a.z), 0.98);
@@ -575,12 +634,13 @@ export class CharacterAnimator {
         const target = _v3.set(p.zip.tx, p.zip.ty, p.zip.tz);
         this.armIK(s, 0, target, 0.95);
         this.armIK(s, 1, target, 0.95);
-        this.setE(s, 'thighL', 0.35, 0, 0.08);
-        this.setE(s, 'thighR', 0.2, 0, -0.08);
-        this.setE(s, 'shinL', 0.7, 0, 0);
-        this.setE(s, 'shinR', 0.5, 0, 0);
-        this.setE(s, 'footL', 0.4, 0, 0);
-        this.setE(s, 'footR', 0.4, 0, 0);
+        // Knees drawn up together behind the pull.
+        this.setE(s, 'thighL', -0.55, 0, 0.04);
+        this.setE(s, 'thighR', -0.25, 0, -0.04);
+        this.setE(s, 'shinL', 1.45, 0, 0);
+        this.setE(s, 'shinR', 1.1, 0, 0);
+        this.setE(s, 'footL', 0.6, 0, 0);
+        this.setE(s, 'footR', 0.6, 0, 0);
         break;
       }
       case S_WALL:
@@ -639,6 +699,31 @@ export class CharacterAnimator {
         break;
       }
     }
+  }
+
+  /**
+   * Landing crouch on top of a ground pose: back and chest bent forward, head
+   * up, the right hand down on the ground ahead and the left arm out behind.
+   */
+  private crouchPose(s: number, feet: Vector3, headYaw: number): void {
+    const c = this.crouchW;
+    if (c < 0.01) return;
+    this.setE(s, 'spine', 0.35 * c, 0, 0);
+    this.setE(s, 'chest', 0.22 * c, 0, 0);
+    this.setE(s, 'head', -0.8 * c, headYaw * (1 - c), 0);
+    this.setE(s, 'upperArmL', 0.05 + 0.6 * c, 0, 0.14 + 0.85 * c);
+    this.setE(s, 'foreArmL', -0.25 - 0.25 * c, 0, 0);
+    const P = this.poses[s]!;
+    const joints = [J.upperArmR, J.foreArmR, J.handR] as const;
+    for (let i = 0; i < 3; i++) _keep[i]!.copy(P[joints[i]]!);
+    const sy = Math.sin(this.yaw),
+      cy = Math.cos(this.yaw);
+    // Ahead of the feet and a little to the right (the hero's right is -X at yaw 0).
+    const x = feet.x + sy * 0.42 - cy * 0.2,
+      z = feet.z + cy * 0.42 + sy * 0.2;
+    _ct.set(x, this.groundAt(x, feet.y + 0.5, z) + 0.1, z);
+    this.armIK(s, 1, _ct, 1);
+    for (let i = 0; i < 3; i++) P[joints[i]]!.slerpQuaternions(_keep[i]!, _q.copy(P[joints[i]]!), c);
   }
 
   /** Arm IK toward a world point at `reach` of full arm length; result copied into pose s. */

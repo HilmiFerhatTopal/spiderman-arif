@@ -19,6 +19,7 @@ export const tr = {
     resume: 'Devam Et',
     controls: 'Kontroller',
     settings: 'Ayarlar',
+    costume: 'Kostüm',
     mainMenu: 'Ana Menü',
     back: 'Geri',
     paused: 'Duraklatıldı',
@@ -66,6 +67,16 @@ export const tr = {
       'Alçak engellerin üstünden koşarken otomatik atlarsın.',
     ],
     tipsTitle: 'İpuçları',
+  },
+  costume: {
+    title: 'Kostüm',
+    hint: 'Seçtiğin kostüm hemen giyilir ve kaydedilir.',
+    names: {
+      redGold: 'Kırmızı-Altın',
+      redNavy: 'Kırmızı-Lacivert',
+      blackGold: 'Siyah-Altın',
+      blackWhite: 'Siyah-Beyaz',
+    },
   },
   bindings: {
     title: 'Tuş Atamaları',

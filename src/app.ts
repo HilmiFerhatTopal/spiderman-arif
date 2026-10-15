@@ -282,6 +282,7 @@ export class App {
     game.rig.autoFollow = s.cameraFollow;
     game.dayNight.dayLengthMinutes = s.dayLengthMinutes;
     game.input.setBindings(s.bindings);
+    game.setCostume(s.costume);
     this.audio.setVolumes(s.masterVolume, s.musicVolume, s.sfxVolume);
   }
 

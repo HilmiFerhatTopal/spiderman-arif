@@ -3,7 +3,8 @@ import { expectClean, openGame, saveResult } from './helpers';
 
 // (f) Character: procedural animation keeps planted feet fixed (no foot
 // sliding), limbs out of solid geometry, and every bone finite, across
-// locomotion, swinging, wall crawling and zipping.
+// locomotion, swinging, wall crawling, zipping and a hard landing crouch;
+// strong releases do air tricks.
 test('f. character: no foot sliding, no limb clipping, no NaN', async ({ page }) => {
   const problems = await openGame(page);
   const r = await page.evaluate(() => {
@@ -26,5 +27,8 @@ test('f. character: no foot sliding, no limb clipping, no NaN', async ({ page })
   expect(r.wallTicks).toBeGreaterThan(200);
   expect(r.zipTicks).toBeGreaterThan(50);
   for (const s of ['idle', 'run', 'air', 'swing', 'zip', 'wall', 'traverse', 'release']) expect(r.statesSeen).toContain(s);
+  // Acrobatics: strong releases flip or corkscrew; a hard landing drops into the crouch.
+  expect(r.tricksFlip + r.tricksTwist).toBeGreaterThan(0);
+  expect(r.crouchPeak).toBeGreaterThan(0.4);
   expectClean(problems);
 });
